@@ -60,6 +60,18 @@
         <button class="btn rot" id="btn-rotate">⟳ Rotate 45°</button>
         <button class="btn primary drop" id="btn-drop">Drop</button>
       </div>
+      <button class="chat-toggle" id="chat-toggle" title="Toggle chat">💬</button>
+      <div class="chat-panel hidden" id="chat-panel">
+        <div class="chat-head">
+          <span>Chat</span>
+          <button class="chat-close" id="chat-close" aria-label="Close chat">×</button>
+        </div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <form class="chat-input" id="chat-form">
+          <input id="chat-input" type="text" maxlength="140" placeholder="Say something…" autocomplete="off" />
+          <button type="submit" class="btn">Send</button>
+        </form>
+      </div>
       <div class="toast" id="toast"></div>
     </section>
 

@@ -230,6 +230,7 @@
         });
         window.Game.applyRemotePreview(lobby.currentPreview || null);
         window.Game.applyRemoteDrop(lobby.currentDrop || null);
+        renderChat(lobby.chat || {});
       } else {
         // Transition into game screen.
         enterNetGame(code, lobby);
@@ -343,6 +344,54 @@
     });
   }
 
+  // Chat rendering. Messages in lobby.chat are keyed by push id (time-ordered).
+  // We render the last ~30 and flash a toast for new incoming ones when the
+  // panel is closed, so players can see chatter without breaking focus.
+  let lastRenderedChatIds = new Set();
+  function renderChat(chatMap) {
+    const el = document.getElementById('chat-messages');
+    if (!el) return;
+    const entries = Object.entries(chatMap).sort((a, b) => (a[1].at || 0) - (b[1].at || 0));
+    const last30 = entries.slice(-30);
+    const newIds = new Set(last30.map(([k]) => k));
+    // Repaint list.
+    el.innerHTML = '';
+    for (const [, msg] of last30) {
+      const row = document.createElement('div');
+      row.className = 'chat-msg';
+      row.innerHTML = `<span class="name">${escapeHtml(msg.name || 'anon')}</span>${escapeHtml(msg.text || '')}`;
+      el.appendChild(row);
+    }
+    el.scrollTop = el.scrollHeight;
+    // Show a small toast for each new message if the panel is hidden.
+    const panelOpen = !document.getElementById('chat-panel').classList.contains('hidden');
+    if (!panelOpen && lastRenderedChatIds.size) {
+      for (const [id, msg] of last30) {
+        if (!lastRenderedChatIds.has(id)) flashChatToast(`${msg.name}: ${msg.text}`);
+      }
+    }
+    lastRenderedChatIds = newIds;
+  }
+  let toastHideTimer = null;
+  function flashChatToast(text) {
+    let toast = document.getElementById('chat-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'chat-toast';
+      toast.className = 'chat-toast';
+      document.getElementById('screen-game').appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(toastHideTimer);
+    toastHideTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+  }
+  function sendChatMessage(text) {
+    if (!currentLobbyCode) return;
+    const name = (window.Username.get() || 'anon').trim();
+    window.Net.sendChat(currentLobbyCode, window.Net.UID, name, text).catch(() => {});
+  }
+
   function lobbyPlacementsArray(lobby) {
     if (!lobby.placements) return [];
     // We write placements as map { p0, p1, ... }. Sort by key order.
@@ -445,5 +494,6 @@
     isInNetGame: () => !!currentLobbyCode,
     quickPlay,
     restartNetRound,
+    sendChatMessage,
   };
 })();

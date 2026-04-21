@@ -474,13 +474,31 @@
 
   function bootEngine() {
     engine = Matter.Engine.create();
-    engine.gravity.y = 0.5;           // softer drop
-    engine.positionIterations = 16;   // more iterations = fewer tunneling bugs
+    engine.gravity.y = 0.5;
+    engine.positionIterations = 16;
     engine.velocityIterations = 12;
     engine.enableSleeping = true;
     world = engine.world;
     runner = Matter.Runner.create();
     Matter.Runner.run(runner, engine);
+
+    // Per-pair friction: grippy against the ground platform (pieces plant),
+    // slick between animals (pieces slide off each other instead of sticking).
+    // Matter otherwise takes Math.min of both bodies' friction, which can't
+    // give us different stickiness for the two cases from body props alone.
+    const tunePair = pair => {
+      const aGround = pair.bodyA.label === 'ground';
+      const bGround = pair.bodyB.label === 'ground';
+      if (aGround || bGround) {
+        pair.friction = 0.95;
+        pair.frictionStatic = 1.4;
+      } else {
+        pair.friction = 0.18;
+        pair.frictionStatic = 0.25;
+      }
+    };
+    Matter.Events.on(engine, 'collisionStart', evt => evt.pairs.forEach(tunePair));
+    Matter.Events.on(engine, 'collisionActive', evt => evt.pairs.forEach(tunePair));
   }
 
   function start(opts) {

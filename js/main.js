@@ -140,6 +140,31 @@
       });
     }
 
+    // In-game chat wiring.
+    const chatToggle = document.getElementById('chat-toggle');
+    const chatPanel = document.getElementById('chat-panel');
+    const chatForm = document.getElementById('chat-form');
+    const chatInput = document.getElementById('chat-input');
+    const chatClose = document.getElementById('chat-close');
+    if (chatToggle && chatPanel) {
+      chatToggle.addEventListener('click', () => {
+        chatPanel.classList.toggle('hidden');
+        if (!chatPanel.classList.contains('hidden')) chatInput.focus();
+      });
+    }
+    if (chatClose) chatClose.addEventListener('click', () => chatPanel.classList.add('hidden'));
+    if (chatForm) {
+      chatForm.addEventListener('submit', e => {
+        e.preventDefault();
+        const text = chatInput.value.trim();
+        if (!text) return;
+        if (window.Lobby && window.Lobby.isInNetGame()) {
+          window.Lobby.sendChatMessage(text);
+        }
+        chatInput.value = '';
+      });
+    }
+
     renderMapList();
   }
 

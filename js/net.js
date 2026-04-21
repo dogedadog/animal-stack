@@ -208,6 +208,18 @@
     });
   }
 
+  // Push a chat message under the lobby. Keep it short — these are broadcast
+  // to all subscribers on every update.
+  async function sendChat(code, uid, name, text) {
+    await whenReady();
+    const { ref, push } = fb();
+    const clean = String(text || '').slice(0, 140).trim();
+    if (!clean) return;
+    await push(ref(fb().db, `lobbies/${code}/chat`), {
+      uid, name: String(name || 'anon').slice(0, 16), text: clean, at: Date.now(),
+    });
+  }
+
   // Live aim ghost — active player writes this while moving the piece.
   async function writePreview(code, data) {
     await whenReady();
@@ -243,7 +255,7 @@
     whenReady,
     createLobby, joinLobby, subscribeLobby, updateLobby, leaveLobby,
     subscribePublicLobbies, listOpenPublicLobbies, startGame, restartRound,
-    writeTurnSnapshot, writePreview, writeDropEvent, writeGameOver,
+    writeTurnSnapshot, writePreview, writeDropEvent, writeGameOver, sendChat,
     playersBySeat,
   };
 })();

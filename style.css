@@ -218,3 +218,57 @@ select:focus, #priv-join-code:focus { border-color: var(--accent); }
 .controls .btn:disabled, .btn:disabled {
   opacity: 0.45; cursor: not-allowed;
 }
+
+/* In-game chat */
+.chat-toggle {
+  position: absolute; top: 10px; right: 12px; z-index: 6;
+  background: rgba(0,0,0,0.4); border: 0; color: #fff;
+  width: 40px; height: 40px; border-radius: 50%;
+  font-size: 20px; cursor: pointer; pointer-events: auto;
+}
+.chat-toggle:hover { background: rgba(0,0,0,0.6); }
+
+.chat-panel {
+  position: absolute; top: 60px; right: 12px; z-index: 7;
+  width: min(320px, calc(100vw - 24px));
+  max-height: 55vh;
+  background: rgba(20, 25, 50, 0.96);
+  border-radius: 14px; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+.chat-panel.hidden { display: none; }
+.chat-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; color: var(--muted);
+}
+.chat-close {
+  background: transparent; border: 0; color: var(--muted);
+  font-size: 20px; cursor: pointer; padding: 0 6px;
+}
+.chat-messages {
+  flex: 1; min-height: 120px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px; border-radius: 8px; background: rgba(0,0,0,0.3);
+  font-size: 13px;
+}
+.chat-msg { line-height: 1.35; word-wrap: break-word; }
+.chat-msg .name { color: var(--accent); font-weight: 600; margin-right: 6px; }
+.chat-input { display: flex; gap: 6px; }
+.chat-input input {
+  flex: 1; padding: 8px 10px; font-size: 13px;
+  background: var(--bg-2); color: var(--text);
+  border: 1px solid #2a325f; border-radius: 8px; outline: none;
+}
+.chat-input input:focus { border-color: var(--accent); }
+.chat-input button { padding: 8px 14px; font-size: 13px; }
+
+.chat-toast {
+  position: absolute; top: 60px; right: 60px; z-index: 5;
+  background: rgba(0,0,0,0.7); color: #fff; padding: 6px 10px;
+  border-radius: 8px; font-size: 12px; opacity: 0;
+  transition: opacity 0.25s ease; pointer-events: none;
+  max-width: 260px;
+}
+.chat-toast.show { opacity: 1; }

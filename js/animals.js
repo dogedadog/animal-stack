@@ -361,29 +361,57 @@ const ANIMALS = [
 // Sim is 1200×720; this keeps pieces readable without overwhelming the board.
 const SIZE_SCALE = 1.6;
 
+// Precompute each animal's weighted centre-of-mass and geometric (bbox) centre
+// in DESIGN-space (unscaled). We use these at construction time to shift parts
+// so that Matter's auto-computed COM lands on the visual centre of the piece.
+// That lets every animal rest flat on the platform instead of tipping toward
+// its heaviest cluster of parts.
+for (const animal of ANIMALS) {
+  let totalArea = 0, weightedX = 0, weightedY = 0;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of animal.parts) {
+    const area = p.type === 'circle' ? Math.PI * p.r * p.r : p.w * p.h;
+    weightedX += area * p.x;
+    weightedY += area * p.y;
+    totalArea += area;
+    const hw = p.type === 'circle' ? p.r : p.w / 2;
+    const hh = p.type === 'circle' ? p.r : p.h / 2;
+    if (p.x - hw < minX) minX = p.x - hw;
+    if (p.x + hw > maxX) maxX = p.x + hw;
+    if (p.y - hh < minY) minY = p.y - hh;
+    if (p.y + hh > maxY) maxY = p.y + hh;
+  }
+  animal._comX = weightedX / totalArea;
+  animal._comY = weightedY / totalArea;
+  animal._geoX = (minX + maxX) / 2;
+  animal._geoY = (minY + maxY) / 2;
+}
+
 // Build a compound Matter body for an animal at (x, y) with rotation in radians.
-// (x, y) is the body's centre of mass, so the position we broadcast over the
-// network round-trips identically — no drift when remote clients rebuild.
+// (x, y) is the body's centre of mass AND visual centre — parts are pre-shifted
+// by (geoCentre − weightedCOM) so the auto-computed Matter COM lands on the
+// bbox centre. Every animal therefore balances around its visual middle and
+// rests flat on the platform instead of tipping toward a heavy tail/neck.
 function makeAnimalBody(animal, x, y, angle = 0) {
   const s = SIZE_SCALE;
-  // Parts placed relative to origin; Body.create will compute the COM there.
+  const shiftX = (animal._geoX - animal._comX) * s;
+  const shiftY = (animal._geoY - animal._comY) * s;
   const bodyParts = animal.parts.map(p => {
     if (p.type === 'circle') {
-      return Matter.Bodies.circle(p.x * s, p.y * s, p.r * s, { render: { color: p.color } });
+      return Matter.Bodies.circle(p.x * s + shiftX, p.y * s + shiftY, p.r * s, { render: { color: p.color } });
     }
-    return Matter.Bodies.rectangle(p.x * s, p.y * s, p.w * s, p.h * s, { render: { color: p.color } });
+    return Matter.Bodies.rectangle(p.x * s + shiftX, p.y * s + shiftY, p.w * s, p.h * s, { render: { color: p.color } });
   });
   const compound = Matter.Body.create({
     parts: bodyParts,
     friction: 0.9,
     frictionStatic: 1.3,
-    frictionAir: 0.015,   // air drag softens impact velocity on landing
+    frictionAir: 0.015,
     restitution: 0,
     density: (animal.density || 0.002) * 0.6,
     label: 'animal:' + animal.id,
-    slop: 0.05,           // tolerate small overlaps — stops jittery pop-aparts
+    slop: 0.05,
   });
-  // Snap the COM to the caller's (x, y) — this is the authoritative position.
   Matter.Body.setPosition(compound, { x, y });
   if (angle) Matter.Body.setAngle(compound, angle);
   compound.animalId = animal.id;
@@ -413,9 +441,17 @@ function drawAnimal(ctx, body, animal, { ghost = false } = {}) {
   }
 
   const s = SIZE_SCALE;
+  // Eyes/beak design coords were not shifted when parts were (makeAnimalBody
+  // applies the COM shift directly to parts). Apply the same shift here so
+  // decorations paint on the same spot on the body.
+  const shiftX = (animal._geoX - animal._comX) * s;
+  const shiftY = (animal._geoY - animal._comY) * s;
   const cx = body.position.x, cy = body.position.y, ang = body.angle;
   const cos = Math.cos(ang), sin = Math.sin(ang);
-  const project = (ox, oy) => ({ x: cx + ox * cos - oy * sin, y: cy + ox * sin + oy * cos });
+  const project = (ox, oy) => {
+    const dx = ox + shiftX, dy = oy + shiftY;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+  };
 
   if (animal.eyes) {
     for (const eye of animal.eyes) {
