@@ -138,7 +138,9 @@
   function onPieceSettled(body) {
     Matter.Body.set(body, 'friction', LOCK_FRICTION);
     Matter.Body.set(body, 'frictionAir', LOCK_FRICTION_AIR);
-    Matter.Sleeping.set(body, true);
+    // Lock settled pieces fully — the compound-body solver gets unstable when
+    // lots of jagged shapes stack and wake each other. Static = no chain chaos.
+    Matter.Body.setStatic(body, true);
     body.settled = true;
 
     if (!running || gameOverCalled) return;
@@ -321,17 +323,19 @@
     inputLocked = true;
     if (onStatus) onStatus('');
 
+    let loserName, score = placedBodies.length - 1;
     if (net) {
-      // Only the active player (who simulates) should broadcast — but be safe
-      // and let the first detector write; Firebase write-wins handles the race.
       const loserSeat = fallenBody.placedBy;
       const loser = net.playersNet[loserSeat] || net.playersNet[0];
-      if (net.onBroadcastGameOver) net.onBroadcastGameOver(loser.uid, loser.name, placedBodies.length - 1);
-      return;
+      loserName = loser.name;
+      if (net.onBroadcastGameOver) net.onBroadcastGameOver(loser.uid, loser.name, score);
+    } else {
+      const loser = players[fallenBody.placedBy] || players[0];
+      loserName = loser.name;
     }
-
-    const loser = players[fallenBody.placedBy] || players[0];
-    if (onGameOver) onGameOver({ loser, score: placedBodies.length - 1 });
+    // Show the modal on this client too — the Firebase echo is blocked by the
+    // gameOverCalled guard so we have to fire it locally.
+    if (onGameOver) onGameOver({ loser: { name: loserName }, score });
   }
 
   function drawSettlingHighlight() {
@@ -401,7 +405,7 @@
       body.settled = true;
       Matter.Body.set(body, 'friction', LOCK_FRICTION);
       Matter.Body.set(body, 'frictionAir', LOCK_FRICTION_AIR);
-      Matter.Sleeping.set(body, true);
+      Matter.Body.setStatic(body, true);
       Matter.World.add(world, body);
       placedBodies.push(body);
     }
@@ -437,7 +441,7 @@
       for (const b of placedBodies) {
         Matter.Body.set(b, 'friction', LOCK_FRICTION);
         Matter.Body.set(b, 'frictionAir', LOCK_FRICTION_AIR);
-        if (!b.isSleeping) Matter.Sleeping.set(b, true);
+        if (!b.isStatic) Matter.Body.setStatic(b, true);
         b.settled = true;
       }
     } else {
