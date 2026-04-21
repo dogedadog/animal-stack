@@ -217,15 +217,17 @@
 
     if (lobby.status === 'playing') {
       if (document.getElementById('screen-game').classList.contains('active')) {
-        // Already in game — push state updates to the engine.
+        // If the previous game had a gameOver modal, close it — new round.
+        if (!lobby.gameOver) {
+          const modal = document.getElementById('gameover');
+          if (modal) modal.classList.add('hidden');
+        }
         window.Game.applyNetUpdate({
           placements: lobbyPlacementsArray(lobby),
           turnSeat: lobby.turnSeat || 0,
           nextAnimalId: lobby.nextAnimalId,
           gameOver: lobby.gameOver,
         });
-        // Live preview ghost + drop event (spectators only — active player
-        // ignores these since the engine is driving their own view).
         window.Game.applyRemotePreview(lobby.currentPreview || null);
         window.Game.applyRemoteDrop(lobby.currentDrop || null);
       } else {
@@ -428,11 +430,20 @@
     }
   }
 
+  async function restartNetRound() {
+    if (!currentLobbyCode) return;
+    try {
+      const firstAnimalId = randomAnimalId();
+      await window.Net.restartRound(currentLobbyCode, firstAnimalId);
+    } catch (e) { console.error('restartRound failed', e); }
+  }
+
   window.Lobby = {
     openPublicScreen, closePublicScreen,
     cleanupLobby, leaveInGame,
     getPracticePlatformSize,
     isInNetGame: () => !!currentLobbyCode,
     quickPlay,
+    restartNetRound,
   };
 })();

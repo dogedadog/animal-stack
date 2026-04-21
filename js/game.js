@@ -424,6 +424,14 @@
       return;
     }
 
+    // gameOver was cleared → new round. Reset engine state so we accept play.
+    if (gameOverCalled) {
+      gameOverCalled = false;
+      running = true;
+      inputLocked = false;
+      lastAppliedTurnSeat = -1; // force fresh rebuild below
+    }
+
     const nextSeat = (typeof turnSeat === 'number') ? turnSeat : currentTurn;
 
     // Mid-turn echoes (my own preview + drop broadcasts) trigger lobby updates
@@ -466,11 +474,9 @@
 
   function bootEngine() {
     engine = Matter.Engine.create();
-    engine.gravity.y = 0.65;
-    engine.positionIterations = 10;
-    engine.velocityIterations = 8;
-    // Let Matter auto-sleep low-motion bodies — kills jitter on thin
-    // protrusions (fox tail, giraffe legs) without forcing them static.
+    engine.gravity.y = 0.5;           // softer drop
+    engine.positionIterations = 16;   // more iterations = fewer tunneling bugs
+    engine.velocityIterations = 12;
     engine.enableSleeping = true;
     world = engine.world;
     runner = Matter.Runner.create();

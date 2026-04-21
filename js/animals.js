@@ -375,12 +375,13 @@ function makeAnimalBody(animal, x, y, angle = 0) {
   });
   const compound = Matter.Body.create({
     parts: bodyParts,
-    friction: 0.7,
-    frictionStatic: 1.1,
+    friction: 0.9,
+    frictionStatic: 1.3,
+    frictionAir: 0.015,   // air drag softens impact velocity on landing
     restitution: 0,
     density: (animal.density || 0.002) * 0.6,
     label: 'animal:' + animal.id,
-    slop: 0.02,
+    slop: 0.05,           // tolerate small overlaps — stops jittery pop-aparts
   });
   // Snap the COM to the caller's (x, y) — this is the authoritative position.
   Matter.Body.setPosition(compound, { x, y });

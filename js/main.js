@@ -106,7 +106,8 @@
     document.getElementById('go-again').addEventListener('click', () => {
       document.getElementById('gameover').classList.add('hidden');
       if (window.Lobby && window.Lobby.isInNetGame && window.Lobby.isInNetGame()) {
-        window.Lobby.leaveInGame();
+        // Multiplayer: restart the round in place with the same roster.
+        window.Lobby.restartNetRound();
       } else {
         startPracticeGame();
       }

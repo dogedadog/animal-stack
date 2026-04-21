@@ -176,6 +176,19 @@
     });
   }
 
+  // Start another round with the same roster — any client can trigger it.
+  async function restartRound(code, firstAnimalId) {
+    await updateLobby(code, {
+      status: 'playing',
+      turnSeat: 0,
+      nextAnimalId: firstAnimalId,
+      placements: null,
+      gameOver: null,
+      currentPreview: null,
+      currentDrop: null,
+    });
+  }
+
   // Write a full turn-end snapshot: placements map, next turn seat, next animal.
   // Also clears the live preview + drop so spectators stop rendering the old
   // falling piece — the rebuild happens from `placements` now.
@@ -229,7 +242,7 @@
     get UID() { return UID; },
     whenReady,
     createLobby, joinLobby, subscribeLobby, updateLobby, leaveLobby,
-    subscribePublicLobbies, listOpenPublicLobbies, startGame,
+    subscribePublicLobbies, listOpenPublicLobbies, startGame, restartRound,
     writeTurnSnapshot, writePreview, writeDropEvent, writeGameOver,
     playersBySeat,
   };
