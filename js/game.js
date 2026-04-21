@@ -5,7 +5,12 @@
 (() => {
   const ROTATE_STEP = Math.PI / 4;
   const DROP_Y = 40;
-  const FALL_MARGIN = 120;
+  // A piece is "fallen" only if it's clearly below the platform AND actively
+  // falling. This avoids false positives on pieces that are merely near an edge
+  // or briefly poke past the platform bounds before coming to rest.
+  const FALL_MARGIN = 300;
+  const OFFSCREEN_X_MARGIN = 150;
+  const FALL_MIN_DOWN_V = 2;
 
   const SETTLE_LIN_V = 0.08;
   const SETTLE_ANG_V = 0.005;
@@ -244,12 +249,18 @@
   function checkFellOff() {
     if (performance.now() < ignoreUntil) return;
     // Authority rule for net mode: only the active player runs fall detection.
-    // Non-active clients have sleeping snapshots only — they shouldn't trigger
-    // game over from a slightly-drifted rebuild they didn't simulate.
     if (net && currentTurn !== net.mySeat) return;
-    const limit = groundBottomY() + FALL_MARGIN;
+    const yLimit = groundBottomY() + FALL_MARGIN;
     for (const b of placedBodies) {
-      if (b.position.y > limit || b.position.x < -80 || b.position.x > W + 80) {
+      const below = b.position.y > yLimit;
+      const offSide = b.position.x < -OFFSCREEN_X_MARGIN || b.position.x > W + OFFSCREEN_X_MARGIN;
+      // Sleeping or resting pieces never trigger — only pieces that are
+      // actively moving downward (really falling) can end the game.
+      const falling = !b.isSleeping && b.velocity.y > FALL_MIN_DOWN_V;
+      if ((below && falling) || (offSide && falling)) {
+        console.log('[animal-stack] fall-off triggered',
+          b.animalId, 'pos', Math.round(b.position.x), Math.round(b.position.y),
+          'vy', b.velocity.y.toFixed(2), 'limit', Math.round(yLimit));
         triggerGameOver(b);
         return;
       }
