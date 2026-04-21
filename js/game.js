@@ -421,12 +421,19 @@
     }
 
     const nextSeat = (typeof turnSeat === 'number') ? turnSeat : currentTurn;
-    // If this update is the active player's OWN echo (turn just moved away from
-    // me), my local stack already matches the broadcast — don't rip bodies out
-    // and re-add them, that momentarily wakes sleepers and can cause drift.
+
+    // Mid-turn echoes (my own preview + drop broadcasts) trigger lobby updates
+    // where turnSeat, placements, and nextAnimalId all remain the same. They
+    // carry no new board state — bail out so we don't respawn the preview
+    // (flashing) or rebuild and wipe the just-dropped piece (vanishing).
+    if (lastAppliedTurnSeat === nextSeat && lastAppliedTurnSeat !== -1) {
+      return;
+    }
+
+    // Turn has actually changed. If the echo is *my* snapshot (I just finished
+    // my turn), skip the full rebuild — my bodies already match the broadcast.
     const isMyEcho = lastAppliedTurnSeat === net.mySeat && nextSeat !== net.mySeat && placedBodies.length === (placements ? placements.length : 0);
     if (isMyEcho) {
-      // Make sure every piece is asleep & locked, then hand turn off.
       for (const b of placedBodies) {
         Matter.Body.set(b, 'friction', LOCK_FRICTION);
         Matter.Body.set(b, 'frictionAir', LOCK_FRICTION_AIR);
