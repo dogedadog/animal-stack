@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Animal Stack</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Main menu -->
+    <section id="screen-menu" class="screen active">
+      <h1>Animal<br/>Stack</h1>
+      <p class="tagline">Stack the zoo. Don't let it fall.</p>
+      <div class="menu-buttons">
+        <button class="btn primary" id="menu-quickplay">Quick Play</button>
+        <button class="btn" data-nav="practice">Practice</button>
+        <button class="btn" data-nav="public">Public Lobbies</button>
+        <button class="btn" data-nav="private">Private Lobby</button>
+        <button class="btn ghost" data-nav="settings">Username / Settings</button>
+      </div>
+      <p class="hint" id="menu-quickplay-hint"></p>
+      <p class="footer-note">v0.3 · Phase 3</p>
+    </section>
+
+    <!-- Practice setup -->
+    <section id="screen-practice-setup" class="screen">
+      <button class="back" data-nav="menu">← Back</button>
+      <h2>Practice</h2>
+      <p>Pick a map and play solo.</p>
+      <div class="map-list" id="map-list"></div>
+      <label class="field">
+        <span>Platform size</span>
+        <div class="seg" id="practice-size">
+          <button type="button" data-size="small">Small</button>
+          <button type="button" data-size="normal" class="on">Normal</button>
+          <button type="button" data-size="big">Big</button>
+        </div>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="bot-toggle" />
+        <span>Play against a bot (alternate turns)</span>
+      </label>
+      <button class="btn primary big" id="start-practice">Start</button>
+    </section>
+
+    <!-- Game -->
+    <section id="screen-game" class="screen game">
+      <div class="hud">
+        <button class="back small" id="game-leave">✕</button>
+        <div class="hud-info">
+          <div><span class="label">Stacked</span><span id="hud-score">0</span></div>
+          <div><span class="label">Turn</span><span id="hud-turn">You</span></div>
+          <div><span class="label">Map</span><span id="hud-map">—</span></div>
+        </div>
+      </div>
+      <canvas id="game-canvas"></canvas>
+      <div class="controls">
+        <button class="btn rot" id="btn-rotate">⟳ Rotate 45°</button>
+        <button class="btn primary drop" id="btn-drop">Drop</button>
+      </div>
+      <div class="toast" id="toast"></div>
+    </section>
+
+    <!-- Settings / Username -->
+    <section id="screen-settings" class="screen">
+      <button class="back" data-nav="menu">← Back</button>
+      <h2>Username</h2>
+      <p>Choose a name. You can change it once per hour.</p>
+      <input id="username-input" maxlength="16" placeholder="your name" />
+      <p class="hint" id="username-hint"></p>
+      <button class="btn primary" id="save-username">Save</button>
+    </section>
+
+    <!-- Public lobby list -->
+    <section id="screen-public" class="screen">
+      <button class="back" data-nav="menu">← Back</button>
+      <h2>Public Lobbies</h2>
+      <p class="muted" id="public-hint">Open lobbies that anyone can join.</p>
+      <div class="lobby-list" id="public-list"></div>
+    </section>
+
+    <!-- Private lobby hub -->
+    <section id="screen-private" class="screen">
+      <button class="back" data-nav="menu">← Back</button>
+      <h2>Private Lobby</h2>
+      <div class="card">
+        <h3>Create</h3>
+        <label class="field"><span>Max players</span>
+          <div class="seg" id="priv-max">
+            <button type="button" data-n="2" class="on">2</button>
+            <button type="button" data-n="3">3</button>
+            <button type="button" data-n="4">4</button>
+          </div>
+        </label>
+        <label class="field"><span>Platform size</span>
+          <div class="seg" id="priv-size">
+            <button type="button" data-size="small">Small</button>
+            <button type="button" data-size="normal" class="on">Normal</button>
+            <button type="button" data-size="big">Big</button>
+          </div>
+        </label>
+        <label class="field"><span>Map</span>
+          <select id="priv-map">
+            <option value="grass">Meadow</option>
+            <option value="desert">Desert Dunes</option>
+            <option value="winter">Winter Lake</option>
+          </select>
+        </label>
+        <label class="checkbox"><input type="checkbox" id="priv-public" /><span>Also list publicly</span></label>
+        <button class="btn primary" id="priv-create">Create lobby</button>
+      </div>
+      <div class="card">
+        <h3>Join</h3>
+        <label class="field"><span>Lobby code</span>
+          <input id="priv-join-code" maxlength="4" placeholder="ABCD" autocomplete="off" />
+        </label>
+        <button class="btn" id="priv-join">Join</button>
+      </div>
+      <p class="hint" id="priv-hint"></p>
+    </section>
+
+    <!-- Lobby waiting room -->
+    <section id="screen-waiting" class="screen">
+      <button class="back" id="wait-leave">← Leave</button>
+      <h2>Lobby <span class="code" id="wait-code">----</span></h2>
+      <p class="muted">Share the code so friends can join.</p>
+      <div class="player-list" id="wait-players"></div>
+      <div class="lobby-meta">
+        <span id="wait-map">Map: —</span>
+        <span id="wait-size">Platform: —</span>
+        <span id="wait-slots">— / —</span>
+      </div>
+      <p class="hint" id="wait-hint"></p>
+      <button class="btn primary big" id="wait-start" disabled>Start</button>
+    </section>
+
+    <!-- Game over modal -->
+    <div id="gameover" class="modal hidden">
+      <div class="modal-inner">
+        <h2 id="go-title">It fell!</h2>
+        <p id="go-body"></p>
+        <div class="modal-buttons">
+          <button class="btn" data-nav="menu">Menu</button>
+          <button class="btn primary" id="go-again">Play Again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Matter.js physics -->
+  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.20.0/build/matter.min.js"></script>
+
+  <!-- Firebase SDK + exports -->
+  <script type="module" src="js/firebase.js"></script>
+
+  <!-- Game scripts -->
+  <script src="js/animals.js"></script>
+  <script src="js/maps.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/username.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/lobby.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
