@@ -5,12 +5,17 @@
 (() => {
   const ROTATE_STEP = Math.PI / 4;
   const DROP_Y = 40;
-  // A piece is "fallen" only if it's clearly below the platform AND actively
-  // falling. This avoids false positives on pieces that are merely near an edge
-  // or briefly poke past the platform bounds before coming to rest.
   const FALL_MARGIN = 300;
   const OFFSCREEN_X_MARGIN = 150;
   const FALL_MIN_DOWN_V = 2;
+
+  // Fixed simulation dimensions — all physics, positions broadcast over the
+  // network, and coordinates in animal/map/preview code are expressed in this
+  // 400×800 "sim space". The canvas renders by letterboxing sim space into
+  // whatever CSS size the device gives us, so a piece at sim x=250 looks like
+  // the same spot on every phone.
+  const SIM_W = 400;
+  const SIM_H = 800;
 
   const SETTLE_LIN_V = 0.08;
   const SETTLE_ANG_V = 0.005;
@@ -26,7 +31,9 @@
 
   let engine, world, runner;
   let canvas, ctx;
-  let W = 0, H = 0, DPR = 1;
+  let W = SIM_W, H = SIM_H, DPR = 1;
+  // Letterbox transform state: sim (0..W, 0..H) maps to canvas pixels via scale+offset.
+  let renderScale = 1, renderOffsetX = 0, renderOffsetY = 0;
 
   let map = null;
   let platformSize = 'normal';
@@ -58,10 +65,14 @@
   function resize() {
     const rect = canvas.getBoundingClientRect();
     DPR = Math.min(window.devicePixelRatio || 1, 2);
-    W = rect.width; H = rect.height;
-    canvas.width = Math.round(W * DPR);
-    canvas.height = Math.round(H * DPR);
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const cssW = rect.width, cssH = rect.height;
+    canvas.width = Math.round(cssW * DPR);
+    canvas.height = Math.round(cssH * DPR);
+    // Sim dimensions are fixed — devices differ only in the CSS→sim scale.
+    W = SIM_W; H = SIM_H;
+    renderScale = Math.min(cssW / SIM_W, cssH / SIM_H);
+    renderOffsetX = (cssW - SIM_W * renderScale) / 2;
+    renderOffsetY = (cssH - SIM_H * renderScale) / 2;
   }
 
   function buildMap() {
@@ -202,8 +213,10 @@
     canvas.removeEventListener('pointercancel', onUp);
   }
   function localX(e) {
+    // Convert screen pixel → sim-space x, undoing the letterbox transform.
     const r = canvas.getBoundingClientRect();
-    return e.clientX - r.left;
+    const cssX = e.clientX - r.left;
+    return (cssX - renderOffsetX) / renderScale;
   }
   function isMyTurn() {
     if (net) return currentTurn === net.mySeat;
@@ -305,7 +318,14 @@
   function loop() {
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, W, H);
+    // Clear the full backing canvas in screen space, then set the sim transform
+    // so all game drawing happens in 0..SIM_W × 0..SIM_H coordinates.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#0b1020';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(DPR * renderScale, 0, 0, DPR * renderScale,
+                     DPR * renderOffsetX, DPR * renderOffsetY);
+
     map.paintBackground(ctx, W, H, platformSize);
     map.paintGround(ctx, W, H, platformSize);
 
