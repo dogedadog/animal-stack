@@ -224,6 +224,10 @@
           nextAnimalId: lobby.nextAnimalId,
           gameOver: lobby.gameOver,
         });
+        // Live preview ghost + drop event (spectators only — active player
+        // ignores these since the engine is driving their own view).
+        window.Game.applyRemotePreview(lobby.currentPreview || null);
+        window.Game.applyRemoteDrop(lobby.currentDrop || null);
       } else {
         // Transition into game screen.
         enterNetGame(code, lobby);
@@ -327,6 +331,12 @@
       },
       onBroadcastGameOver: async (loserUid, loserName, score) => {
         try { await window.Net.writeGameOver(code, loserUid, loserName, score); } catch (_) {}
+      },
+      onBroadcastPreview: (data) => {
+        window.Net.writePreview(code, data).catch(() => {});
+      },
+      onBroadcastDrop: (data) => {
+        window.Net.writeDropEvent(code, data).catch(() => {});
       },
     });
   }

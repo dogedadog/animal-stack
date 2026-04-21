@@ -4,18 +4,19 @@
 
 (() => {
   const ROTATE_STEP = Math.PI / 4;
-  const DROP_Y = 40;
+  const DROP_Y = 60;
   const FALL_MARGIN = 300;
-  const OFFSCREEN_X_MARGIN = 150;
+  const OFFSCREEN_X_MARGIN = 200;
   const FALL_MIN_DOWN_V = 2;
 
-  // Fixed simulation dimensions — all physics, positions broadcast over the
-  // network, and coordinates in animal/map/preview code are expressed in this
-  // 400×800 "sim space". The canvas renders by letterboxing sim space into
-  // whatever CSS size the device gives us, so a piece at sim x=250 looks like
-  // the same spot on every phone.
-  const SIM_W = 400;
-  const SIM_H = 800;
+  // Fixed simulation dimensions — positions broadcast over the network mean
+  // the same thing on every device. Canvas letterboxes this sim into whatever
+  // viewport it gets. 1200×720 = 5:3, close to typical laptop aspects.
+  const SIM_W = 1200;
+  const SIM_H = 720;
+
+  // Throttle for broadcasting the aim preview while a player is moving it.
+  const PREVIEW_BROADCAST_MS = 70;
 
   const SETTLE_LIN_V = 0.08;
   const SETTLE_ANG_V = 0.005;
@@ -54,8 +55,10 @@
   let stillFrames = 0;
 
   // Net mode state — only populated when start({ netMode: true }).
-  let net = null;   // { code, mySeat, playersNet: [{uid,name,seat}], onBroadcastTurnEnd, onBroadcastGameOver }
+  let net = null;   // { code, mySeat, playersNet, onBroadcastTurnEnd, onBroadcastGameOver, onBroadcastPreview, onBroadcastDrop }
   let lastAppliedTurnSeat = -1;
+  let lastPreviewBroadcastAt = 0;
+  let lastAppliedDropKey = null; // dedupe remote drop events
 
   let onGameOver = null;
   let onScore = null;
@@ -102,8 +105,10 @@
 
   function dropPreview() {
     if (!preview || inputLocked) return;
-    const body = makeAnimalBody(preview.animal, preview.x, DROP_Y, preview.angle);
+    const dropX = preview.x, dropAngle = preview.angle, animalId = preview.animal.id;
+    const body = makeAnimalBody(preview.animal, dropX, DROP_Y, dropAngle);
     body.placedBy = currentTurn;
+    if (net) body.placedByUid = net.playersNet[currentTurn] && net.playersNet[currentTurn].uid;
     Matter.World.add(world, body);
     placedBodies.push(body);
     ignoreUntil = performance.now() + 400;
@@ -117,6 +122,17 @@
     score = placedBodies.length;
     if (onScore) onScore(score);
     if (onStatus) onStatus('Settling…');
+
+    // Tell other clients to start rendering the fall locally so they see the
+    // piece descend instead of the piece "popping in" on turn end.
+    if (net && net.onBroadcastDrop) {
+      net.onBroadcastDrop({
+        animalId, x: dropX, y: DROP_Y, angle: dropAngle,
+        placedByUid: body.placedByUid || null,
+        droppedAt: Date.now(),
+      });
+    }
+    if (net && net.onBroadcastPreview) net.onBroadcastPreview(null);
   }
 
   function onPieceSettled(body) {
@@ -231,15 +247,33 @@
     if (!touchStart || e.pointerId !== touchStart.pointerId) return;
     const x = localX(e);
     if (Math.abs(x - touchStart.x) > 5) touchStart.moved = true;
-    if (preview) preview.x = clampX(x);
+    if (preview) {
+      preview.x = clampX(x);
+      maybeBroadcastPreview();
+    }
   }
   function onUp(e) {
     if (!touchStart || e.pointerId !== touchStart.pointerId) return;
     const dt = performance.now() - touchStart.t;
     if (!touchStart.moved && dt < 300 && preview) {
       preview.angle += ROTATE_STEP;
+      maybeBroadcastPreview(true);
     }
     touchStart = null;
+  }
+
+  function maybeBroadcastPreview(force) {
+    if (!net || !net.onBroadcastPreview || !preview) return;
+    if (!isMyTurn()) return;
+    const now = performance.now();
+    if (!force && now - lastPreviewBroadcastAt < PREVIEW_BROADCAST_MS) return;
+    lastPreviewBroadcastAt = now;
+    net.onBroadcastPreview({
+      animalId: preview.animal.id,
+      x: preview.x,
+      angle: preview.angle,
+      at: Date.now(),
+    });
   }
 
   function applyMapEffects() {
@@ -335,7 +369,7 @@
     }
     drawSettlingHighlight();
 
-    if (preview && running && !gameOverCalled && isMyTurn()) {
+    if (preview && running && !gameOverCalled) {
       const previewBody = makeAnimalBody(preview.animal, preview.x, DROP_Y, preview.angle);
       drawAnimal(ctx, previewBody, preview.animal, { ghost: true });
     }
@@ -452,6 +486,8 @@
         playersNet: opts.netPlayers,
         onBroadcastTurnEnd: opts.onBroadcastTurnEnd,
         onBroadcastGameOver: opts.onBroadcastGameOver,
+        onBroadcastPreview: opts.onBroadcastPreview,
+        onBroadcastDrop: opts.onBroadcastDrop,
       };
       players = opts.netPlayers.map(p => ({ name: p.name, type: 'net' }));
       currentTurn = opts.turnSeat || 0;
@@ -501,11 +537,48 @@
   }
 
   function drop() { dropPreview(); }
-  function rotate() { if (preview && !inputLocked) preview.angle += ROTATE_STEP; }
+  function rotate() {
+    if (preview && !inputLocked) {
+      preview.angle += ROTATE_STEP;
+      maybeBroadcastPreview(true);
+    }
+  }
   function getMapName() { return map ? map.name : ''; }
+
+  // Apply opponent's aim ghost. data null => hide preview (their turn but not aiming).
+  function applyRemotePreview(data) {
+    if (!net) return;
+    if (net.mySeat === currentTurn) return; // I'm aiming locally; ignore.
+    if (!data) { preview = null; return; }
+    const animal = getAnimal(data.animalId);
+    if (!animal) return;
+    preview = { animal, x: data.x, angle: data.angle };
+  }
+
+  // Apply opponent's drop event — create a dynamic body so spectators see the
+  // fall. On turn-end snapshot, we'll rebuild and converge to the final state.
+  function applyRemoteDrop(data) {
+    if (!net || !data) return;
+    if (net.mySeat === currentTurn) return; // I dropped it; already in my world.
+    const key = (data.placedByUid || '') + ':' + (data.droppedAt || 0);
+    if (key === lastAppliedDropKey) return;
+    lastAppliedDropKey = key;
+    const animal = getAnimal(data.animalId);
+    if (!animal) return;
+    const body = makeAnimalBody(animal, data.x, data.y || DROP_Y, data.angle || 0);
+    const seat = net.playersNet.findIndex(p => p.uid === data.placedByUid);
+    body.placedBy = seat >= 0 ? seat : 0;
+    body.placedByUid = data.placedByUid;
+    Matter.World.add(world, body);
+    placedBodies.push(body);
+    preview = null;
+    score = placedBodies.length;
+    if (onScore) onScore(score);
+  }
 
   window.Game = {
     start, stop, drop, rotate, getMapName, applyNetUpdate,
+    applyRemotePreview, applyRemoteDrop,
     setCallbacks(cbs) {
       onGameOver = cbs.onGameOver || null;
       onScore = cbs.onScore || null;

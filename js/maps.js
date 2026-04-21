@@ -1,8 +1,10 @@
 // Map definitions. Platforms are shorter + higher up than a floor — skill test.
 // Platform size is chosen per-match (practice/lobby): small|normal|big.
 
-const PLATFORM = { yFrac: 0.72, thick: 18 };
-const PLATFORM_W_FRAC = { small: 0.22, normal: 0.30, big: 0.46 };
+// Tuned for the 1200×720 landscape sim. Platform sits a little past half-way
+// down and varies from compact (skill test) to roomy (easy mode).
+const PLATFORM = { yFrac: 0.72, thick: 20 };
+const PLATFORM_W_FRAC = { small: 0.13, normal: 0.19, big: 0.28 };
 
 function platformWFrac(size) {
   return PLATFORM_W_FRAC[size] || PLATFORM_W_FRAC.normal;

@@ -171,23 +171,43 @@
       nextAnimalId: firstAnimalId,
       placements: null,
       gameOver: null,
+      currentPreview: null,
+      currentDrop: null,
     });
   }
 
   // Write a full turn-end snapshot: placements map, next turn seat, next animal.
+  // Also clears the live preview + drop so spectators stop rendering the old
+  // falling piece — the rebuild happens from `placements` now.
   async function writeTurnSnapshot(code, placements, nextTurnSeat, nextAnimalId) {
     await whenReady();
     const { ref, update } = fb();
     const placementsMap = {};
     placements.forEach((p, i) => {
-      // Zero-pad so string sort equals array order for up to 9999 pieces.
       placementsMap['p' + String(i).padStart(4, '0')] = p;
     });
     await update(ref(fb().db, 'lobbies/' + code), {
       placements: placementsMap,
       turnSeat: nextTurnSeat,
       nextAnimalId,
+      currentPreview: null,
+      currentDrop: null,
     });
+  }
+
+  // Live aim ghost — active player writes this while moving the piece.
+  async function writePreview(code, data) {
+    await whenReady();
+    const { ref, set } = fb();
+    await set(ref(fb().db, `lobbies/${code}/currentPreview`), data);
+  }
+
+  // Fires once when the active player taps Drop. Spectators use it to
+  // render a local fall animation before the authoritative snapshot lands.
+  async function writeDropEvent(code, data) {
+    await whenReady();
+    const { ref, set } = fb();
+    await set(ref(fb().db, `lobbies/${code}/currentDrop`), data);
   }
 
   async function writeGameOver(code, loserUid, loserName, score) {
@@ -209,7 +229,8 @@
     get UID() { return UID; },
     whenReady,
     createLobby, joinLobby, subscribeLobby, updateLobby, leaveLobby,
-    subscribePublicLobbies, listOpenPublicLobbies, startGame, writeTurnSnapshot, writeGameOver,
+    subscribePublicLobbies, listOpenPublicLobbies, startGame,
+    writeTurnSnapshot, writePreview, writeDropEvent, writeGameOver,
     playersBySeat,
   };
 })();

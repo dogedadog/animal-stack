@@ -358,7 +358,9 @@ const ANIMALS = [
 ];
 
 // Master scale — tweak once here to grow/shrink every piece in lockstep.
-const SIZE_SCALE = 1.4;
+// Sim space is now 1200×720 (landscape), so pieces are scaled up to stay
+// visually proportional to the larger play area and platform widths.
+const SIZE_SCALE = 2.2;
 
 // Build a compound Matter body for an animal at (x, y) with rotation in radians.
 // (x, y) is the body's centre of mass, so the position we broadcast over the
