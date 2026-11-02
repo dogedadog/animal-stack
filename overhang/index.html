@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#070B14" />
+  <meta name="description" content="OVERHANG — slide a glass puck toward the edge of the void. The more it hangs, the more it pays. Play-money demo." />
+  <title>OVERHANG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-chip" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.75"/><circle cx="12" cy="12" r="4.25" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 11v5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><circle cx="12" cy="8" r="1" fill="currentColor"/></symbol>
+      <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18V6L7.5 9.5H4z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/><path class="wave" d="M15.5 9.2a4 4 0 0 1 0 5.6M18 6.8a7.5 7.5 0 0 1 0 10.4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><path class="slash" d="M5 5l14 14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></symbol>
+      <symbol id="i-again" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><path d="M19 4v4.5h-4.5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></symbol>
+      <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 4v15M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </defs>
+  </svg>
+
+  <div id="app" class="app">
+    <!-- Top bar -->
+    <header class="topbar">
+      <button id="balanceBtn" class="balance" type="button" aria-label="Balance. Opens the fairness panel" data-testid="balance">
+        <svg class="icon" aria-hidden="true"><use href="#i-chip"/></svg>
+        <span id="balance" class="num">1,000</span>
+      </button>
+      <div class="topbar-stats" id="topStats" aria-hidden="true">
+        <span>BEST <b id="statBest" class="num">—</b></span>
+        <span>BIGGEST <b id="statBiggest" class="num">—</b></span>
+        <span>RTP <b id="statRtp" class="num">—</b></span>
+      </div>
+      <div class="topbar-actions">
+        <button id="infoBtn" class="iconbtn" type="button" aria-label="Fairness and rules" data-testid="info"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg></button>
+        <button id="muteBtn" class="iconbtn" type="button" aria-label="Sound" aria-pressed="false" data-testid="mute"><svg class="icon" aria-hidden="true"><use href="#i-sound"/></svg></button>
+      </div>
+    </header>
+
+    <!-- Stage: canvas + non-interactive overlays -->
+    <main class="stage" id="stage">
+      <canvas id="canvas" data-testid="canvas"></canvas>
+
+      <div class="odds" id="odds" data-testid="odds" aria-hidden="true">
+        <div class="odds-bar">
+          <div class="seg seg-short" id="oddsShort"><span class="seg-label">SHORT</span><span class="seg-val num"><b>23</b>%</span></div>
+          <div class="seg seg-zone" id="oddsZone"><span class="seg-label">ZONE</span><span class="seg-val num"><b>23</b>%</span></div>
+          <div class="seg seg-hang" id="oddsHang"><span class="seg-label">HANG</span><span class="seg-val num"><b>16</b>%</span></div>
+          <div class="seg seg-bust" id="oddsBust"><span class="seg-label">BUST</span><span class="seg-val num"><b>38</b>%</span></div>
+        </div>
+        <div class="odds-chip num" id="oddsChip" hidden>ALL PAYS ×1.13</div>
+      </div>
+
+      <div class="corner num" id="corner" aria-hidden="true">
+        <div id="cornerNext">next #--------</div>
+        <div id="cornerLast"></div>
+      </div>
+
+      <div class="lockup" id="lockup" aria-hidden="true">
+        <div class="lockup-tier" id="lockupTier"></div>
+        <div class="lockup-mult num" id="lockupMult"></div>
+        <div class="lockup-sub num" id="lockupSub"></div>
+        <div class="lockup-win num" id="lockupWin"></div>
+      </div>
+
+      <div class="caption" id="caption" hidden>Top up to play</div>
+
+      <div class="hint" id="hint" hidden data-testid="hint">
+        <svg class="icon hint-arrow" aria-hidden="true"><use href="#i-arrow-down"/></svg>
+        <p>Pull down, let go.<br/>Hang it over the edge — further hang, bigger pay.</p>
+        <button class="hint-close" id="hintClose" type="button" aria-label="Dismiss hint"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+      </div>
+    </main>
+
+    <!-- Controls: footer on phone, left console on desktop -->
+    <aside class="console console-left" id="controls">
+      <div class="group group-bet">
+        <div class="label desk-only">BET</div>
+        <div class="pill bet-pill" id="betPill" data-testid="bet">
+          <button class="pill-btn" id="betDown" type="button" aria-label="Decrease bet">−</button>
+          <button class="pill-value" id="betValue" type="button" aria-label="Bet amount. Long press for maximum"><span class="pill-caption">BET</span><span class="num" id="betNum">10</span></button>
+          <button class="pill-btn" id="betUp" type="button" aria-label="Increase bet">+</button>
+        </div>
+        <div class="ladder desk-only" id="ladder" aria-hidden="true"></div>
+      </div>
+
+      <div class="group group-size">
+        <div class="label desk-only">PUCK</div>
+        <div class="segmented" id="sizeSeg" role="group" aria-label="Puck size" data-testid="sizes">
+          <span class="seg-thumb" aria-hidden="true"></span>
+          <button type="button" class="seg-btn" data-size="S" aria-pressed="false" title="Small puck · hangs about 1 in 16 · pays to 21×"><span class="seg-main">S</span><span class="seg-sub">1 in 16 · to 21×</span></button>
+          <button type="button" class="seg-btn" data-size="M" aria-pressed="false" title="Medium puck · hangs about 1 in 10 · pays to 14×"><span class="seg-main">M</span><span class="seg-sub">1 in 10 · to 14×</span></button>
+          <button type="button" class="seg-btn" data-size="L" aria-pressed="true" title="Large puck · hangs about 1 in 6 · pays to 10×"><span class="seg-main">L</span><span class="seg-sub">1 in 6 · to 10×</span></button>
+        </div>
+      </div>
+
+      <div class="group group-aim desk-only">
+        <div class="label">AIM</div>
+        <div class="aim-read num" id="aimRead">97%</div>
+      </div>
+
+      <div class="group group-again">
+        <button class="pill again" id="againBtn" type="button" disabled data-testid="again">
+          <span>AGAIN</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-again"/></svg>
+        </button>
+        <button class="pill topup" id="topupBtn" type="button" hidden data-testid="topup">TOP UP +1,000</button>
+        <div class="keys desk-only" aria-hidden="true">
+          <span>hold = auto</span>
+        </div>
+      </div>
+
+      <div class="group group-keys desk-only" aria-hidden="true">
+        <div class="label">KEYS</div>
+        <div class="keys">
+          <span><kbd>Space</kbd> hold &amp; release to pull</span>
+          <span><kbd>←</kbd><kbd>→</kbd> nudge aim</span>
+          <span><kbd>Enter</kbd> again</span>
+          <span><kbd>↑</kbd><kbd>↓</kbd> bet · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> puck</span>
+          <span><kbd>M</kbd> mute · <kbd>F</kbd> fairness · <kbd>H</kbd> heat map</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right console (desktop only) -->
+    <aside class="console console-right" id="rightCol" aria-hidden="true">
+      <section class="panel">
+        <div class="label">LAST 10</div>
+        <ol class="results" id="results"></ol>
+      </section>
+      <section class="panel">
+        <div class="label">ODDS FOR THIS PULL</div>
+        <div class="odds-bar odds-bar-card" id="oddsCard">
+          <div class="seg seg-short"><span class="seg-label">SHORT</span><span class="seg-val num"><b>23</b>%</span></div>
+          <div class="seg seg-zone"><span class="seg-label">ZONE</span><span class="seg-val num"><b>23</b>%</span></div>
+          <div class="seg seg-hang"><span class="seg-label">HANG</span><span class="seg-val num"><b>16</b>%</span></div>
+          <div class="seg seg-bust"><span class="seg-label">BUST</span><span class="seg-val num"><b>38</b>%</span></div>
+        </div>
+        <div class="odds-pays num" id="oddsPays">ZONE 1.25× · HANG 1.26–10.10×</div>
+        <div class="odds-chip num" id="oddsChipCard" hidden>ALL PAYS ×1.13</div>
+      </section>
+      <section class="panel">
+        <div class="label">FAIRNESS</div>
+        <p class="small">Every pull is priced at 96.5% before you let go. The seed is committed before release and revealed after.</p>
+        <button class="pill ghost-pill" id="openFairness" type="button">Open full panel <kbd>F</kbd></button>
+      </section>
+    </aside>
+  </div>
+
+  <!-- Fairness panel: bottom sheet on phone, modal on desktop -->
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <section class="sheet" id="fairness" role="dialog" aria-modal="true" aria-labelledby="fairTitle" hidden data-testid="fairness">
+    <header class="sheet-head">
+      <h2 id="fairTitle">How OVERHANG pays</h2>
+      <button class="iconbtn" id="fairClose" type="button" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="sheet-body">
+      <p><b>How it pays.</b> Your puck stops at <i>aim × wax</i>, where wax is one random draw (log-normal, σ = 0.10) made before you let go. Below the 90% line: nothing. In the pay zone: 1.25×. Nose over the edge: the multiplier is how far it hangs, from about 1.3× to 10× (L), 14× (M) or 21× (S). Past the edge: it falls.</p>
+      <p><b>Every pull is priced at 96.5%.</b> Shallow and deep pulls short or bust more often, so everything they win is scaled up by a factor that depends only on your aim (“ALL PAYS ×1.13”), and every pull returns the same 96.5% on average before rounding (multipliers are rounded down to 0.01×, so the long-run figure is about 96.3%). The table below is that pricing for your current puck.</p>
+      <p class="honesty" data-testid="honesty"><b>The outcome is decided by the draw and your own aim. Nothing adjusts it afterward: no balance-aware weighting, no streak logic, no near-miss injection. The pricing factor is a function of aim only, shown before release.</b></p>
+
+      <div class="label">PRICING FOR THE <span id="fairSize">L</span> PUCK</div>
+      <div class="table-wrap">
+        <table class="fair-table num" id="fairTable" data-testid="fair-table">
+          <thead><tr><th>Aim</th><th>Short</th><th>Zone</th><th>Hang</th><th>Bust</th><th>Factor</th><th>Zone pays</th><th>Hang pays</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="label">SESSION</div>
+      <p class="num" id="fairSession">0 rounds</p>
+      <div class="stats-grid num">
+        <div><span>Best overhang</span><b id="fairBest">—</b></div>
+        <div><span>Biggest win</span><b id="fairBiggest">—</b></div>
+        <div><span>Hangs</span><b id="fairHangs">0</b></div>
+        <div><span>Top-ups</span><b id="fairTopups">0</b></div>
+      </div>
+
+      <div class="label">SETTINGS</div>
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="togReduce" /><span>Reduce motion</span></label>
+        <label class="toggle"><input type="checkbox" id="togHeat" checked /><span>Show heat-map dots</span></label>
+      </div>
+
+      <div class="label">VERIFY A ROUND</div>
+      <p class="small">We show SHA-256(seed) before you release and the seed after. Z = √(−2 ln u₁)·cos(2π u₂) from the first 8 seed bytes, wax = e<sup>0.1·Z</sup>, stop = aim × wax. In the console, <code>__overhang.setSeedHex(hex)</code> replays any seed.</p>
+      <div class="label">LAST 20 ROUNDS</div>
+      <div class="table-wrap">
+        <table class="fair-table log-table num" id="logTable" data-testid="log-table">
+          <thead><tr><th>#</th><th>Commit</th><th>Seed</th><th>Aim</th><th>Puck</th><th>Bet</th><th>Wax</th><th>Stop</th><th>Result</th><th>Win</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="small muted">Play-money demo. No real money, no accounts.</p>
+    </div>
+  </section>
+
+  <div class="sr-only" aria-live="polite" id="live"></div>
+
+  <script src="math.js" defer></script>
+  <script src="audio.js" defer></script>
+  <script src="game.js" defer></script>
+</body>
+</html>

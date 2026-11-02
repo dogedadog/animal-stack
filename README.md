@@ -32,6 +32,10 @@ For development / playtesting, paste these into **Firebase Console → Realtime 
 
 `.read`/`.write` must be set on the `lobbies` node itself (not only on `$code`), otherwise listing public lobbies fails with `permission_denied at /lobbies`. If you see that error in the browser console, this is why.
 
+## OVERHANG (casino-style demo)
+
+A second, self-contained game lives in [`overhang/`](overhang/): slide a glass puck toward a ledge over the void and get paid by how far it hangs over the edge. Play-money demo, phone and desktop, zero assets, static files only. See [`overhang/README.md`](overhang/README.md) for controls and the fairness model. Deploys with the rest of the site at `/overhang/`.
+
 ## Phases
 - **Phase 1**: practice + bots + maps + rotation + Firebase init. ✓
 - **Phase 2**: bigger/complex animal shapes, slower gravity, platform-size option, strict settlement, lock-ish settled pieces. ✓
