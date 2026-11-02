@@ -168,6 +168,20 @@
       g.putImageData(img, 0, 0); return c;
     };
     sprites.cloudTeal = buildCloud(C.teal); sprites.cloudMag = buildCloud(C.magenta);
+    sprites.glow.violet = build([124, 80, 255]);
+    // rail: vertical teal fade, bright at the ledge
+    const rail = makeCanvas(2, 256); { const rg = rail.getContext('2d'); const gr = rg.createLinearGradient(0, 0, 0, 256); gr.addColorStop(0, 'rgba(46,242,200,0.95)'); gr.addColorStop(0.5, 'rgba(46,242,200,0.35)'); gr.addColorStop(1, 'rgba(46,242,200,0)'); rg.fillStyle = gr; rg.fillRect(0, 0, 2, 256); }
+    sprites.rail = rail;
+    // sweep: a soft band of white used for the specular pass over the slab
+    const sw = makeCanvas(64, 4); { const sg = sw.getContext('2d'); const img = sg.createImageData(64, 4); const d = img.data;
+      for (let x = 0; x < 64; x++) { const hx = ((x + 0.5) / 64 - 0.5) * 5; const a = Math.exp(-hx * hx / 2); for (let y = 0; y < 4; y++) { const i = (y * 64 + x) * 4; d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = Math.round(a * 255); } }
+      sg.putImageData(img, 0, 0); }
+    sprites.sweep = sw;
+    // beams: soft vertical light columns, bright at the bottom (the puck), fading up into the void
+    const buildBeam = (rgb) => { const w = 32, h = 256; const c = makeCanvas(w, h); const g = c.getContext('2d'); const img = g.createImageData(w, h); const d = img.data;
+      for (let y = 0; y < h; y++) { const ay = Math.pow((y + 0.5) / h, 1.6); for (let x = 0; x < w; x++) { const hx = ((x + 0.5) / w - 0.5) * 2; const ax = Math.pow(Math.max(0, 1 - hx * hx), 2); const i = (y * w + x) * 4; d[i] = rgb[0]; d[i + 1] = rgb[1]; d[i + 2] = rgb[2]; d[i + 3] = Math.round(ax * ay * 255); } }
+      g.putImageData(img, 0, 0); return c; };
+    sprites.beam = { amber: buildBeam(C.amber), gold: buildBeam(C.goldRGB), teal: buildBeam(C.teal) };
   }
   function buildPuckSprites() {
     for (const k of SIZE_KEYS) {
@@ -175,10 +189,21 @@
       const c = makeCanvas(size, size); const g = c.getContext('2d'); g.scale(L.dpr, L.dpr);
       const cx = R + pad, cy = R + pad;
       const face = g.createRadialGradient(cx - R * 0.3, cy - R * 0.35, R * 0.1, cx, cy, R);
-      face.addColorStop(0, '#FFFFFF'); face.addColorStop(0.45, C.puck); face.addColorStop(1, '#BFE6F5');
+      face.addColorStop(0, '#FFFFFF'); face.addColorStop(0.4, '#EEFCFF'); face.addColorStop(0.8, '#CFEFFF'); face.addColorStop(1, '#9CCFEF');
       g.fillStyle = face; g.beginPath(); g.arc(cx, cy, R - 1, 0, Math.PI * 2); g.fill();
+      // cool shade toward the bottom-right gives the disc volume
+      const shade = g.createRadialGradient(cx + R * 0.45, cy + R * 0.45, R * 0.1, cx + R * 0.3, cy + R * 0.3, R * 0.95);
+      shade.addColorStop(0, 'rgba(46,160,220,0.26)'); shade.addColorStop(1, 'rgba(46,160,220,0)');
+      g.fillStyle = shade; g.beginPath(); g.arc(cx, cy, R - 1, 0, Math.PI * 2); g.fill();
+      // iridescent rim under the metallic ring
+      const rimW = Math.max(2, R * 0.09);
+      const rimCols = ['rgba(46,242,200,0.6)', 'rgba(207,243,255,0.35)', 'rgba(185,166,255,0.6)', 'rgba(255,224,138,0.4)', 'rgba(46,242,200,0.6)', 'rgba(185,166,255,0.5)'];
+      g.lineWidth = rimW;
+      for (let i = 0; i < rimCols.length; i++) { g.strokeStyle = rimCols[i]; g.beginPath(); g.arc(cx, cy, R - 2.5, (i / rimCols.length) * Math.PI * 2, ((i + 1.2) / rimCols.length) * Math.PI * 2); g.stroke(); }
       g.strokeStyle = C.ring; g.lineWidth = Math.max(1.5, R * 0.06); g.beginPath(); g.arc(cx, cy, R - 1.5, 0, Math.PI * 2); g.stroke();
-      g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1; g.beginPath(); g.arc(cx, cy, R - 3.5, 0, Math.PI * 2); g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 1; g.beginPath(); g.arc(cx, cy, R - 3.5 - rimW, 0, Math.PI * 2); g.stroke();
+      // lens highlight
+      g.save(); g.translate(cx - R * 0.28, cy - R * 0.4); g.scale(1, 0.5); g.fillStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.arc(0, 0, R * 0.4, 0, Math.PI * 2); g.fill(); g.restore();
       sprites.puck[k] = c;
       // reflection: same disc, alpha fading toward the top (into the void)
       const rc = makeCanvas(size, size); const rg = rc.getContext('2d'); rg.scale(L.dpr, L.dpr);
@@ -214,10 +239,11 @@
     g.save(); roundRectPath(g, laneLeft, ledgeY, laneW, slabBottom - ledgeY, [0, 0, 18, 18]); g.clip();
     // deck
     const y90 = yOf(M.ZONE_START);
-    g.fillStyle = C.deck; g.fillRect(laneLeft, y90, laneW, slabBottom - y90);
-    // perspective grid at s = 0.6, 0.7, 0.8 (slightly inset toward the ledge)
-    g.strokeStyle = 'rgba(255,255,255,0.06)'; g.lineWidth = 0.6;
-    for (const s of [0.6, 0.7, 0.8]) { const y = Math.round(yOf(s)) + 0.5; const inset = 6 + (s - 0.5) * 24; g.beginPath(); g.moveTo(laneLeft + inset, y); g.lineTo(laneRight - inset, y); g.stroke(); }
+    const dg = g.createLinearGradient(0, y90, 0, slabBottom); dg.addColorStop(0, '#172039'); dg.addColorStop(0.45, C.deck); dg.addColorStop(1, '#0B1120');
+    g.fillStyle = dg; g.fillRect(laneLeft, y90, laneW, slabBottom - y90);
+    // teal light bleeding down from the 90% line
+    const lg = g.createLinearGradient(0, y90, 0, y90 + 40); lg.addColorStop(0, 'rgba(46,242,200,0.16)'); lg.addColorStop(1, 'rgba(46,242,200,0)');
+    g.fillStyle = lg; g.fillRect(laneLeft, y90, laneW, 40);
     // pay zone
     const zoneTop = ledgeY + R;
     const zg = g.createLinearGradient(0, zoneTop, 0, y90); zg.addColorStop(0, 'rgba(46,242,200,0.14)'); zg.addColorStop(1, 'rgba(46,242,200,0.22)');
@@ -241,6 +267,13 @@
       }
     }
     g.restore();
+    // amber light spilling up from the edge into the void (soft ellipse, clipped to the void side)
+    g.save(); g.beginPath(); g.rect(0, 0, W, ledgeY); g.clip(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.5;
+    g.drawImage(sprites.glow.amber, L.laneX - laneW * 0.8, ledgeY - 70, laneW * 1.6, 140);
+    g.globalAlpha = 0.35; g.drawImage(sprites.glow.gold, L.laneX - laneW * 0.45, ledgeY - 36, laneW * 0.9, 72); g.restore();
+    // faint distance ticks on the left rail
+    g.strokeStyle = 'rgba(46,242,200,0.28)'; g.lineWidth = 1;
+    for (const s of [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85]) { const y = Math.round(yOf(s)) + 0.5; const len = (Math.round(s * 100) % 10 === 0) ? 10 : 5; g.beginPath(); g.moveTo(laneLeft + 1, y); g.lineTo(laneLeft + 1 + len, y); g.stroke(); }
     // ledge hairline (crisp, 2 px)
     g.fillStyle = C.ledge; g.fillRect(laneLeft, ledgeY - 1, laneW, 2);
     g.fillStyle = 'rgba(255,224,138,0.35)'; g.fillRect(laneLeft, ledgeY - 3, laneW, 1);
@@ -365,6 +398,7 @@
     }
     setState('SLIDING');
     el.canvas.classList.remove('aiming');
+    fx.push(ringFx(L.laneX, L.footY, L.R, L.R * 2.3, 320, 'teal'));
     snd('launch'); snd('glideStart'); vibrate(20);
     save();
     return live;
@@ -447,7 +481,7 @@
     el.lockup.classList.remove('show');
     el.lockupMult.className = 'lockup-mult num'; el.lockupSub.className = 'lockup-sub num'; el.lockupWin.className = 'lockup-win num'; el.lockupTier.className = 'lockup-tier';
     setText(el.lockupTier, ''); setText(el.lockupMult, ''); setText(el.lockupSub, ''); setText(el.lockupWin, '');
-    lockupAnim = null;
+    lockupAnim = null; payout = null;
   }
   let lockupAnim = null; // { kind:'pct'|'win', from, to, t0, dur }
   function popMult(cls, text) {
@@ -488,6 +522,7 @@
     if (t >= 2) { fx.push(haloFx(x, y, haloR * 0.8, after + 150, 'amber')); fx.push(flareFx(400, 'ledge', after)); }
     else fx.push(flareFx(250, 'ledge', after));
     emitSparks(x, y, t >= 2 ? 18 : 12, after, t >= 3 ? 'gold' : 'amber');
+    if (t >= 2 && !RM()) fx.push(beamFx(x, y, Rof(rd.size), after + 40, t >= 3 ? 'gold' : 'amber'));
     if (t >= 3 && !RM()) { fx.push(vignetteFx(900, after)); }
     if (t === 3) startShakeAt(3, 250, after);
     const chips = t === 4 ? 60 : t === 3 ? 40 : t === 2 ? 28 : 16;
@@ -547,10 +582,84 @@
       p.kind = 3; p.color = 'magenta'; p.x0 = x; p.y0 = y; p.vx = Math.cos(ang) * sp; p.vy = Math.sin(ang) * sp; p.t0 = now; p.dur = 400 + Math.random() * 200; p.size = 2 + Math.random() * 2; p.x = x; p.y = y; }
   }
   // ambient void dust
-  const dust = [];
+  const dust = [], dustFar = [];
   function seedDust() {
-    dust.length = 0; const n = L.desktop ? 60 : 44;
-    for (let i = 0; i < n; i++) dust.push({ x: Math.random() * L.cssW, y: Math.random() * Math.max(10, L.ledgeY - 4), v: 4 + Math.random() * 4, a: 0.15 + Math.random() * 0.25, s: 1 + Math.random(), ph: Math.random() * 6.28 });
+    dust.length = 0; dustFar.length = 0; const n = L.desktop ? 44 : 32; const top = Math.max(10, L.ledgeY - 4);
+    for (let i = 0; i < n; i++) dust.push({ x: Math.random() * L.cssW, y: Math.random() * top, v: 6 + Math.random() * 5, a: 0.22 + Math.random() * 0.3, s: 1.2 + Math.random() * 1.2, ph: Math.random() * 6.28 });
+    for (let i = 0; i < n * 1.5; i++) dustFar.push({ x: Math.random() * L.cssW, y: Math.random() * top, v: 2.5 + Math.random() * 2.5, a: 0.08 + Math.random() * 0.14, s: 0.8 + Math.random() * 0.6, ph: Math.random() * 6.28 });
+  }
+  // ---- ambient life (cheap, sprite-based, all derived from the clock) ----
+  let auroraBoost = 1;
+  const AUR = [
+    { c: 'teal', ax: 0.28, ay: 0.55, px: 0.00011, py: 0.00007, ph: 0.0, size: 1.7, a: 0.14 },
+    { c: 'violet', ax: 0.72, ay: 0.35, px: 0.00009, py: 0.00012, ph: 2.1, size: 2.0, a: 0.18 },
+    { c: 'magenta', ax: 0.50, ay: 0.75, px: 0.00013, py: 0.00005, ph: 4.0, size: 1.3, a: 0.07 },
+  ];
+  const auroraLayer = { c: document.createElement('canvas'), w: 0, h: 0, mask: null, scale: 0.2 };
+  function drawAurora(g) {
+    const W = L.cssW; const Hfull = Math.max(60, L.ledgeY + 70); const sc = auroraLayer.scale;
+    const w = Math.max(8, Math.round(W * sc)), h = Math.max(8, Math.round(Hfull * sc));
+    const a = auroraLayer;
+    if (a.w !== w || a.h !== h) { a.c.width = w; a.c.height = h; a.w = w; a.h = h; const ag = a.c.getContext('2d'); a.mask = ag.createLinearGradient(0, 0, 0, h); a.mask.addColorStop(0, 'rgba(0,0,0,1)'); a.mask.addColorStop(0.55, 'rgba(0,0,0,0.85)'); a.mask.addColorStop(1, 'rgba(0,0,0,0)'); }
+    const ag = a.c.getContext('2d'); const t = RM() ? 0 : now;
+    ag.setTransform(1, 0, 0, 1, 0, 0); ag.globalCompositeOperation = 'source-over'; ag.globalAlpha = 1; ag.clearRect(0, 0, w, h);
+    ag.globalCompositeOperation = 'lighter';
+    for (const b of AUR) { const x = W * (b.ax + 0.18 * Math.sin(t * b.px + b.ph)); const y = (L.ledgeY + 30) * (b.ay + 0.2 * Math.cos(t * b.py + b.ph)); const d = L.laneW * b.size;
+      ag.globalAlpha = b.a * auroraBoost; ag.drawImage(sprites.glow[b.c], (x - d / 2) * sc, (y - d / 2) * sc, d * sc, d * sc); }
+    ag.globalAlpha = 1; ag.globalCompositeOperation = 'destination-in'; ag.fillStyle = a.mask; ag.fillRect(0, 0, w, h);
+    g.save(); g.globalCompositeOperation = 'lighter'; g.imageSmoothingEnabled = true; g.drawImage(a.c, 0, 0, W, Hfull); g.restore();
+  }
+  function drawFlowGrid(g) {
+    const y90 = yOf(M.ZONE_START); const flow = RM() ? 0 : (now * 0.00003) % 0.1;
+    g.save(); g.beginPath(); g.rect(L.laneLeft, y90, L.laneW, L.slabBottom - y90); g.clip(); g.lineWidth = 1;
+    for (let k = 0; k < 6; k++) {
+      const s = M.S0 + ((k * (0.4 / 6) + flow * (0.4 / 6) / 0.1) % 0.4); const u = (s - M.S0) / 0.4; const a = 0.12 * Math.sin(u * Math.PI); const inset = 6 + u * 16; const y = Math.round(yOf(s)) + 0.5;
+      g.strokeStyle = 'rgba(127,214,255,' + a.toFixed(3) + ')'; g.beginPath(); g.moveTo(L.laneLeft + inset, y); g.lineTo(L.laneRight - inset, y); g.stroke();
+    }
+    g.restore();
+  }
+  function drawZoneBreath(g) {
+    const y90 = yOf(M.ZONE_START); const top = L.ledgeY + L.R; const a = RM() ? 0.03 : 0.03 + 0.03 * Math.sin(now / 1500);
+    g.fillStyle = 'rgba(46,242,200,' + a.toFixed(3) + ')'; g.fillRect(L.laneLeft, top, L.laneW, y90 - top);
+  }
+  function drawRails(g) {
+    const top = L.ledgeY, h = L.slabBottom - top;
+    g.save(); g.globalAlpha = 0.6; g.drawImage(sprites.rail, L.laneLeft - 1, top, 2, h); g.drawImage(sprites.rail, L.laneRight - 1, top, 2, h); g.restore();
+    if (RM()) return;
+    for (let i = 0; i < 2; i++) { const ph = ((now / 3400) + i * 0.5) % 1; const y = L.footY - ph * (L.footY - top); const a = Math.sin(ph * Math.PI) * 0.6; const x = i ? L.laneRight : L.laneLeft;
+      drawGlow('teal', x, y, 26, a); g.globalAlpha = a; g.fillStyle = '#CFF3FF'; g.fillRect(x - 1, y - 6, 2, 12); g.globalAlpha = 1; }
+  }
+  function drawSlabSweep(g) {
+    if (RM()) return; const p = (now / 7000) % 1; if (p > 0.38) return; const u = p / 0.38;
+    const top = L.ledgeY, h = L.slabBottom - top;
+    g.save(); roundRectPath(g, L.laneLeft, top, L.laneW, h, [0, 0, 18, 18]); g.clip();
+    g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.1 * Math.sin(u * Math.PI);
+    const cx = L.laneLeft - 80 + u * (L.laneW + 160); const cy = L.footY - u * (L.footY - top);
+    g.translate(cx, cy); g.rotate(-0.42); g.drawImage(sprites.sweep, -110, -h, 220, h * 2);
+    g.restore();
+  }
+  function drawHangShimmer(g) {
+    if (RM()) return; const ph = (now / 5200) % 1; const R = L.R; const x = L.laneLeft + ph * L.laneW; const a = Math.sin(ph * Math.PI) * 0.18;
+    g.save(); g.beginPath(); g.rect(L.laneLeft, L.ledgeY, L.laneW, R); g.clip(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = a;
+    g.drawImage(sprites.glow.gold, x - R * 1.6, L.ledgeY - R * 0.5, R * 3.2, R * 2); g.restore();
+  }
+  function drawLedgeSparkle(g) {
+    if (RM()) return; const ph = (now / 6000) % 1; const x = L.laneLeft + ph * L.laneW; const a = Math.sin(ph * Math.PI);
+    g.globalAlpha = 0.75 * a; g.fillStyle = '#FFFFFF'; g.fillRect(x - 24, L.ledgeY - 1, 48, 2); g.globalAlpha = 1;
+    drawGlow('gold', x, L.ledgeY, 36, 0.6 * a);
+  }
+  function ringFx(x, y, r0, r1, dur, color) {
+    return { t0: now, dur, world: true, draw(g, u) { const e = easeOutCubic(u); const r = lerp(r0, r1, e); const a = 0.5 * (1 - u);
+      g.strokeStyle = (color === 'teal' ? 'rgba(46,242,200,' : 'rgba(255,181,71,') + a.toFixed(3) + ')'; g.lineWidth = lerp(3, 1, u); g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke(); drawGlow(color, x, y, r * 2.4, a * 0.5); } };
+  }
+  function lineFlashFx() {
+    const y = yOf(M.ZONE_START);
+    return { t0: now, dur: 260, world: true, draw(g, u) { const a = 0.8 * (1 - u); g.fillStyle = 'rgba(46,242,200,' + a.toFixed(3) + ')'; g.fillRect(L.laneLeft, y - 1, L.laneW, 2);
+      g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = a * 0.5; g.drawImage(sprites.glow.teal, L.laneLeft, y - 24, L.laneW, 48); g.restore(); } };
+  }
+  function beamFx(x, y, R, delay, color) {
+    return { t0: now + delay, dur: 900, world: true, draw(g, u) { const a = 0.55 * Math.sin(u * Math.PI); const w = R * 1.8 * (1 + 0.3 * u); const h = L.cssH * 1.2;
+      g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = a; g.drawImage(sprites.beam[color] || sprites.beam.amber, x - w / 2, y - h, w, h); g.restore(); } };
   }
 
   // ---- balance / payout tweens ---------------------------------------------
@@ -625,7 +734,7 @@
     const apply = (root, barW) => {
       if (!root) return; const segs = root.querySelectorAll('.seg');
       for (let i = 0; i < 4; i++) { const pct = vals[i] * 100; const s = segs[i]; if (!s) continue; const pxw = Math.max(3, pct) / 100 * (barW || 360);
-        s.style.flexBasis = Math.max(3, pct) + '%'; s.classList.toggle('narrow', pxw < 68); s.classList.toggle('tiny', pxw < 30);
+        s.style.flexBasis = Math.max(9, pct) + '%'; s.classList.toggle('narrow', pxw < 68); s.classList.remove('tiny');
         setText(s.querySelector('b'), String(Math.round(pct))); s.title = names[i] + ' ' + pct.toFixed(1) + '%'; }
     };
     apply(el.odds.querySelector('.odds-bar'), L.oddsW); apply(el.oddsCard, L.cardW);
@@ -799,7 +908,9 @@
   document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName) || '';
     if (e.key === 'Escape') { if (fairnessOpen) { closeFairness(); return; } if (state === 'AIMING') { cancelAim(); return; } if (hintVisible) dismissHint(); return; }
-    if (fairnessOpen || tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.code === 'KeyF') { e.preventDefault(); if (fairnessOpen) closeFairness(); else { unlockAudio(); openFairness(); } return; }
+    if (fairnessOpen) return;
     unlockAudio();
     switch (e.code) {
       case 'Space':
@@ -892,7 +1003,8 @@
     // balance tween
     if (bal.shown !== bal.to) {
       const u = clamp((now - bal.t0) / bal.dur, 0, 1); const e = easeOutCubic(u);
-      const v = Math.round(lerp(bal.from, bal.to, e));
+      const step = (bal.from % 100 === 0 && bal.to % 100 === 0) ? 100 : 1;
+      const v = Math.round(lerp(bal.from, bal.to, e) / step) * step;
       if (bal.pulse && bal.ticks === 0 && v !== bal.from) { el.balance.classList.remove('pulse'); void el.balance.offsetWidth; el.balance.classList.add('pulse'); }
       if (bal.pulse && v > bal.shown) { const step = Math.max(1000, (bal.to - bal.from) / 20); if (v - bal.tickCents >= step && now - bal.lastTickAt >= 33) { bal.tickCents = v; bal.lastTickAt = now; snd('chipTick', bal.ticks); bal.ticks++; } }
       bal.shown = u >= 1 ? bal.to : v;
@@ -907,6 +1019,9 @@
     for (let i = fx.length - 1; i >= 0; i--) if (now - fx[i].t0 >= fx[i].dur) fx.splice(i, 1);
     // void dust
     for (const d of dust) { d.y -= d.v * dt / 1000; if (d.y < -4) { d.y = L.ledgeY - 2; d.x = Math.random() * L.cssW; } }
+    for (const d of dustFar) { d.y -= d.v * dt / 1000; if (d.y < -4) { d.y = L.ledgeY - 2; d.x = Math.random() * L.cssW; } }
+    const boostT = (live && live.noseOver && state === 'SLIDING') ? 1.8 : (state === 'RESOLVE_HANG' ? 1.5 : 1);
+    auroraBoost += (boostT - auroraBoost) * (1 - Math.exp(-dt / 250));
     // lip shimmer phase is derived from now in render
   }
 
@@ -915,13 +1030,14 @@
     const r = rd.r;
     rd.tSim += simDt;
     let s = M.slidePos(rd.sStop, rd.tSim);
-    if (!rd.crossed90 && s >= M.ZONE_START) { rd.crossed90 = true; popMult('zone', M.fmtMult(rd.priced.zoneMult)); snd('zoneTick'); }
+    if (!rd.crossed90 && s >= M.ZONE_START) { rd.crossed90 = true; popMult('zone', M.fmtMult(rd.priced.zoneMult)); fx.push(lineFlashFx()); snd('zoneTick'); }
     if (!rd.noseOver && s >= 1 - r) {
       rd.noseOver = true; rd.bracketT0 = now;
       const remainingNormal = (rd.lipT !== null ? rd.lipT : rd.T) - rd.tSim;
       let target = RM() ? 0.5 : M.SLOWMO;
       if (remainingNormal / target > M.CREEP_CAP_MS) target = Math.min(1, remainingNormal / M.CREEP_CAP_MS);
       if (remainingNormal > 100 * target) tweenTs(target, M.SLOWMO_IN_MS); // a fast bust stays fast
+      fx.push(flareFx(300, 'ledge', 0));
       snd('padStart');
     }
     if (rd.noseOver && s <= 1) {
@@ -975,7 +1091,7 @@
     const px = L.laneX, py = L.ledgeY + M.CAM_PIVOT_DY;
     g.translate(shake.x, shake.y); g.translate(px, py); g.scale(camK, camK); g.translate(-px, -py);
     g.drawImage(staticCanvas, 0, 0, W, H);
-    drawDust(g); drawShimmer(g);
+    drawAurora(g); drawDust(g); drawFlowGrid(g); drawZoneBreath(g); drawRails(g); drawSlabSweep(g); drawHangShimmer(g); drawLedgeSparkle(g);
     const aiming = state === 'AIMING';
     if (aiming) drawCloud(g);
     for (const f of fx) if (f.world && now >= f.t0) { const u = clamp((now - f.t0) / f.dur, 0, 1); g.save(); f.draw(g, u); g.restore(); }
@@ -986,7 +1102,9 @@
     // idle puck at the foot
     if ((state === 'IDLE' || state === 'AIMING') && P.balanceCents >= 100) {
       const breath = 0.35 + 0.12 * Math.sin(now / 2400 * Math.PI * 2);
-      drawPuckAt(L.laneX, L.footY, L.R, P.size, idlePuckAlpha, idlePuckScale, 1, 0, streakGlow(), null, breath);
+      drawPuckAt(L.laneX, L.footY, L.R, P.size, idlePuckAlpha, idlePuckScale, 1, now / 4000, streakGlow(), null, breath);
+      if (state === 'IDLE' && !RM() && idlePuckAlpha > 0.9) { const ph = ((now - idleT0) / 2400) % 1; if (ph < 0.55) { const u = ph / 0.55; const r = L.R * (1 + 1.4 * easeOutCubic(u)); const a = 0.32 * (1 - u);
+        g.strokeStyle = 'rgba(46,242,200,' + a.toFixed(3) + ')'; g.lineWidth = 1.5; g.beginPath(); g.arc(L.laneX, L.footY, r, 0, Math.PI * 2); g.stroke(); } }
     }
     if (live && live.visible) drawLive(g);
     g.restore();
@@ -997,12 +1115,10 @@
   }
   function drawDust(g) {
     g.fillStyle = '#FFFFFF';
+    for (const d of dustFar) { const a = d.a * (0.7 + 0.3 * Math.sin(now / 1400 + d.ph)); g.globalAlpha = a; g.fillRect(d.x, d.y, d.s, d.s); }
+    g.fillStyle = '#E8FBFF';
     for (const d of dust) { const a = d.a * (0.7 + 0.3 * Math.sin(now / 1000 + d.ph)); g.globalAlpha = a; g.fillRect(d.x, d.y, d.s, d.s); }
     g.globalAlpha = 1;
-  }
-  function drawShimmer(g) {
-    const ph = (now / 6000) % 1; const x = L.laneLeft + ph * L.laneW;
-    drawGlow('white', x, L.ledgeY, 70, 0.28);
   }
   function drawCloud(g) {
     if (cloudAlpha <= 0.01) return;
@@ -1087,7 +1203,7 @@
   function drawWorldParticles(g) {
     for (let i = 0; i < POOL; i++) { const p = parts[i]; if (!p.on || p.kind === 1 || now < p.t0) continue; const u = (now - p.t0) / p.dur;
       if (p.kind === 2) drawGlow(p.color, p.x, p.y, p.size * 4 * (1 - u * 0.5), 0.8 * (1 - u));
-      else { g.globalAlpha = 0.5 * (1 - u); g.fillStyle = '#3A1230'; g.fillRect(p.x, p.y, p.size, p.size); g.globalAlpha = 1; } }
+      else { const a = 0.9 * (1 - u); drawGlow('magenta', p.x, p.y, p.size * 5 * (1 - u * 0.4), a * 0.7); g.globalAlpha = a; g.fillStyle = '#FFB3CF'; g.beginPath(); g.arc(p.x, p.y, Math.max(0.8, p.size * 0.5 * (1 - u)), 0, Math.PI * 2); g.fill(); g.globalAlpha = 1; } }
   }
   function drawChips(g) {
     for (let i = 0; i < POOL; i++) { const p = parts[i]; if (!p.on || p.kind !== 1 || now < p.t0) continue; const u = (now - p.t0) / p.dur;
