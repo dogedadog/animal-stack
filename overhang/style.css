@@ -208,7 +208,9 @@ kbd {
   font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
   color: var(--text-3); line-height: 1.5;
   pointer-events: none; z-index: 2;
+  transition: opacity 200ms var(--ease-out);
 }
+.corner.dim { opacity: 0; }
 .corner div { transition: opacity 300ms; }
 
 /* Result lockup: DOM text below the ledge, moves with resize only */
@@ -276,6 +278,7 @@ kbd {
   opacity: 0; transition: opacity 300ms var(--ease-out);
 }
 .hint.show { opacity: 1; }
+.hint:not(.show) { -webkit-backdrop-filter: none; backdrop-filter: none; }
 .hint[hidden] { display: none; }
 .hint p { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
 .hint-arrow {
@@ -346,7 +349,7 @@ kbd {
   height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center;
   line-height: 1;
 }
-.pill-value .pill-caption { font-size: 9px; font-weight: 600; letter-spacing: 0.16em; color: var(--text-3); margin-bottom: 2px; }
+.pill-value .pill-caption { font-size: 10px; font-weight: 600; letter-spacing: 0.16em; color: var(--text-3); margin-bottom: 2px; }
 .pill-value .num { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
 .pill-value.flash .num { animation: flash 320ms var(--ease-out); }
 @keyframes flash { 0% { color: var(--ledge); transform: scale(1.1); } 100% { color: var(--text); transform: scale(1); } }
@@ -395,7 +398,7 @@ kbd {
 .segmented {
   position: relative; height: 54px; width: 100%;
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-radius: 999px; padding: 3px;
+  border-radius: 999px; padding: 0 3px;
   background:
     linear-gradient(180deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.03) 100%) padding-box,
     linear-gradient(180deg, rgba(255,255,255,0.28) 0%, rgba(127,214,255,0.10) 55%, rgba(255,255,255,0.06) 100%) border-box;
@@ -415,15 +418,18 @@ kbd {
 }
 .seg-btn {
   position: relative; z-index: 1;
-  height: 46px; border-radius: 999px;
+  height: 52px; border-radius: 999px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   line-height: 1; color: var(--text-2);
-  transition: color 160ms, transform 160ms var(--ease-out);
+  transition: color 160ms, transform 160ms var(--ease-out), opacity 160ms;
 }
 .seg-btn:active { transform: scale(0.96); transition-duration: 90ms; }
 .seg-btn[aria-pressed="true"] { color: var(--text); }
+/* sizes are a pre-release choice: dimmed while a puck is in flight or an aim is active */
+.segmented.locked .seg-btn { cursor: default; }
+.segmented.locked .seg-btn:not([aria-pressed="true"]) { opacity: 0.45; }
 .seg-main { font-size: 14px; font-weight: 800; letter-spacing: 0.08em; }
-.seg-sub { font-size: 9.5px; font-weight: 600; letter-spacing: 0.03em; color: var(--text-3); margin-top: 3px; white-space: nowrap; }
+.seg-sub { font-size: 11px; font-weight: 600; letter-spacing: 0.03em; color: var(--text-3); margin-top: 3px; white-space: nowrap; }
 .seg-btn[aria-pressed="true"] .seg-sub { color: var(--text-2); }
 
 .aim-read { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; margin-top: 4px; }
@@ -440,14 +446,18 @@ kbd {
   animation: rowIn 260ms var(--ease-out);
 }
 @keyframes rowIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-.results li .g { font-size: 12px; text-align: center; }
-.results li.hang { color: var(--ledge); } .results li.hang .g::before { content: "⟂"; }
-.results li.zone { color: var(--zone); } .results li.zone .g::before { content: "▭"; }
-.results li.bust { color: var(--bust); } .results li.bust .g::before { content: "✕"; }
-.results li.short { color: var(--short); } .results li.short .g::before { content: "—"; }
+.results li .g { display: inline-flex; align-items: center; justify-content: center; }
+.results li .g .icon { width: 12px; height: 12px; }
+.results li.hang { color: var(--ledge); }
+.results li.zone { color: var(--zone); }
+.results li.bust { color: var(--bust); }
+.results li.short { color: var(--short); }
 .results li .w { text-align: right; }
 .results li .m { color: var(--text-2); font-weight: 600; }
-.odds-bar-card { margin-top: 10px; height: 28px; }
+/* the 290 px card never drops a label: it stacks label over value instead */
+.odds-bar-card { margin-top: 10px; height: 40px; }
+.odds-bar-card .seg { flex-direction: column; gap: 1px; }
+.odds-bar-card .seg.narrow .seg-label { display: inline; }
 .odds-pays { font-size: 12px; color: var(--text-2); margin-top: 8px; font-weight: 600; letter-spacing: 0.04em; }
 .console-right .odds-chip { margin-top: 8px; }
 
@@ -485,8 +495,17 @@ kbd {
 .sheet-body .honesty { color: var(--text); padding: 10px 12px; border-radius: 12px; background: rgba(46,242,200,0.08); border: 1px solid rgba(46,242,200,0.25); }
 .sheet-body .label { margin: 18px 0 8px; }
 .table-wrap { overflow: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,0.07); }
+/* a wide table fades at its right edge until it is scrolled to the end, so the clipped column reads as "more", not as a cut */
+.table-wrap.scrollable:not(.at-end) {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent 100%);
+}
 .fair-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .fair-table th, .fair-table td { padding: 6px 8px; text-align: right; white-space: nowrap; }
+@media (max-width: 420px) {
+  .fair-table th, .fair-table td { padding: 6px 5px; font-size: 11px; }
+  .fair-table th { white-space: normal; line-height: 1.15; vertical-align: bottom; }
+}
 .fair-table th { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 600; background: rgba(255,255,255,0.03); position: sticky; top: 0; }
 .fair-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.025); }
 .fair-table tr.cur td { color: var(--zone); font-weight: 600; }
@@ -507,11 +526,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 /* ---------- Desktop layout ---------- */
 @media (min-width: 900px) {
   body {
-    /* page-wide void: the top of the page is the abyss, the consoles float on it */
+    /* page-wide void: the top of the page is the abyss, the consoles float on it.
+       --void-end is set from layout() to the ledge's page y (+40) so the page void and the lane agree at every height. */
     background:
-      linear-gradient(180deg, var(--void-0) 0%, var(--void-1) 18%, rgba(20,12,42,0) 32%),
+      linear-gradient(180deg, var(--void-0) 0%, var(--void-1) calc(var(--void-end, 288px) * 0.55), rgba(20,12,42,0) var(--void-end, 288px)),
       linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 100%);
   }
+  /* no canvas-wide chrome on desktop: the odds strip floats on the page void */
+  .odds { background: transparent; border-bottom: 0; }
+  .seg-sub { font-size: 10px; }
   .app {
     grid-template-columns: minmax(0, 1fr) 300px 520px 340px minmax(0, 1fr);
     grid-template-rows: var(--topbar-h) minmax(0, 1fr);
@@ -569,8 +592,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 /* Short phones */
 @media (max-height: 640px) and (max-width: 899px) {
   .console-left { gap: 6px; padding-top: 6px; }
-  .segmented { height: 50px; }
-  .seg-btn { height: 42px; }
+  .segmented { height: 50px; padding: 0 3px; }
+  .seg-btn { height: 48px; }
+}
+/* Narrow phones (<= 359 px): keep every bet target >= 48 px and let AGAIN give up width first */
+@media (max-width: 359px) {
+  .pill-btn { width: 48px; }
+  .bet-pill { grid-template-columns: 48px minmax(48px, 1fr) 48px; }
+  .again, .topup { width: auto; min-width: 120px; padding: 0 16px; }
+  .pill-value .num { font-size: 20px; }
 }
 
 /* ---------- Reduced motion ---------- */

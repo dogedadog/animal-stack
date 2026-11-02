@@ -74,16 +74,27 @@
     if (!Array.isArray(p.stops)) p.stops = [];
     if (!Array.isArray(p.log)) p.log = [];
     p.stops = p.stops.filter(Number.isFinite).slice(-40);
-    p.log = p.log.slice(-20);
+    // a well-formed but mistyped field must never crash boot or corrupt stats: coerce counters/booleans, drop malformed log rows
+    const d = defaults();
+    for (const k of ['bestOverhang', 'bestWinCents', 'hangs', 'rounds', 'wageredCents', 'returnedCents', 'topUps']) if (!Number.isFinite(p[k]) || p[k] < 0) p[k] = d[k];
+    p.muted = p.muted === true; p.heatMap = p.heatMap !== false; p.hintSeen = p.hintSeen === true;
+    if (typeof p.reduceMotion !== 'boolean') p.reduceMotion = null;
+    const OUTCOMES = ['short', 'zone', 'hang', 'bust'];
+    p.log = p.log.filter((r) => r && typeof r === 'object' && typeof r.seed === 'string' && OUTCOMES.includes(r.outcome) &&
+      [r.betCents, r.winCents, r.X, r.sStop, r.mult, r.aim].every(Number.isFinite) && (r.f === null || Number.isFinite(r.f)) && SIZE_KEYS.includes(r.size)).slice(-20);
     return p;
   }
   const P = loadProfile();
   let saveTimer = 0;
+  function writeProfile() { try { localStorage.setItem(STORE_KEY, JSON.stringify(P)); } catch (e) { /* storage may be unavailable */ } }
   function save() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { try { localStorage.setItem(STORE_KEY, JSON.stringify(P)); } catch (e) { /* storage may be unavailable */ } }, 100);
+    saveTimer = setTimeout(writeProfile, 100);
   }
-  const SES = { wagered: 0, returned: 0, rounds: 0, streak: 0 };
+  // the 100 ms debounce (spec 9.6) is flushed when the page is hidden or unloaded so the last round is never lost to a backgrounded tab
+  function flushSave() { if (!saveTimer) return; clearTimeout(saveTimer); saveTimer = 0; writeProfile(); }
+  const SES = { wagered: 0, returned: 0, rounds: 0, streak: 0, sumVar: 0 };
+  const PAYOUT_SD = { L: 1.80, M: 2.05, S: 2.46 }; // payout SD per unit bet by puck size (spec 3.6) for the session RTP band
 
   const mqReduce = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false, addEventListener() {} };
   const RM = () => (P.reduceMotion === null || P.reduceMotion === undefined ? !!mqReduce.matches : !!P.reduceMotion);
@@ -124,15 +135,21 @@
     if (L.pxPerUnit < ppu) ppu = L.pxPerUnit;
     L.pxPerUnit = Math.min(L.pxPerUnit, ppu);
     L.ledgeY = Math.max(LY.LEDGE_Y_FLOOR, L.footY - L.pxPerUnit * (1 - M.S0));
+    // a very short stage (landscape phone, out of scope but must stay usable): let the scale drop below its floor so the resting puck is on-canvas
+    if (L.ledgeY + L.pxPerUnit * (1 - M.S0) > L.footY + 0.5) L.pxPerUnit = Math.max(200, (L.footY - L.ledgeY) / (1 - M.S0));
     L.slabBottom = cssH + 24;
     L.R = Rof(P.size);
-    el.lockup.style.top = Math.round(L.ledgeY + 140) + 'px';
+    L.lockupTop = Math.min(Math.round(L.ledgeY + 140), Math.max(0, cssH - 116));
+    el.lockup.style.top = L.lockupTop + 'px';
     el.lockup.style.width = Math.min(L.laneW + 20, cssW - 24) + 'px';
+    // the page-wide void on desktop ends where the lane's own void does (ledge + 40 in page px)
+    try { document.documentElement.style.setProperty('--void-end', Math.round(rect.top + L.ledgeY + 40) + 'px'); } catch (e) { /* ignore */ }
     // chip target: balance element centre in canvas CSS px
     const b = el.balance.getBoundingClientRect();
     L.balX = b.left + b.width / 2 - rect.left;
     L.balY = b.top + b.height / 2 - rect.top;
-    const ob = el.odds.querySelector('.odds-bar'); L.oddsW = ob ? ob.clientWidth : 0; L.cardW = el.oddsCard ? el.oddsCard.clientWidth : 0;
+    L.oddsW = Math.max(0, el.odds.clientWidth - 20); L.cardW = el.oddsCard ? el.oddsCard.clientWidth : 0;
+    measureOdds();
     oddsCache = { aim: -1, size: '' }; updateOdds(shownAim, P.size);
     if (dpr !== lastDpr) { buildGlowSprites(); lastDpr = dpr; }
     buildPuckSprites();
@@ -209,7 +226,8 @@
       const rc = makeCanvas(size, size); const rg = rc.getContext('2d'); rg.scale(L.dpr, L.dpr);
       rg.drawImage(c, 0, 0, size / L.dpr, size / L.dpr);
       rg.globalCompositeOperation = 'destination-in';
-      const fade = rg.createLinearGradient(0, 0, 0, size / L.dpr); fade.addColorStop(0, 'rgba(0,0,0,0)'); fade.addColorStop(1, 'rgba(0,0,0,1)');
+      // opaque at the sprite's top, clear at its bottom: drawn flipped (scale 1,-0.8) the opaque side lands at the ledge and fades into the void
+      const fade = rg.createLinearGradient(0, 0, 0, size / L.dpr); fade.addColorStop(0, 'rgba(0,0,0,1)'); fade.addColorStop(1, 'rgba(0,0,0,0)');
       rg.fillStyle = fade; rg.fillRect(0, 0, size / L.dpr, size / L.dpr);
       sprites.refl[k] = c && rc;
     }
@@ -228,10 +246,12 @@
     const g = staticCanvas.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
     const { laneLeft, laneRight, laneW, ledgeY, slabBottom, pxPerUnit } = L;
     const R = L.R;
-    // void: opaque near-black at the top, fading to transparent at the ledge
-    const vg = g.createLinearGradient(0, 0, 0, ledgeY + 40);
-    vg.addColorStop(0, C.void0); vg.addColorStop(0.55, C.void1); vg.addColorStop(1, 'rgba(20,12,42,0)');
-    g.fillStyle = vg; g.fillRect(0, 0, W, ledgeY + 40);
+    // void: opaque near-black at the top, fading to transparent at the ledge (on desktop the page body paints the void page-wide, so the canvas must not box itself)
+    if (!L.desktop) {
+      const vg = g.createLinearGradient(0, 0, 0, ledgeY + 40);
+      vg.addColorStop(0, C.void0); vg.addColorStop(0.55, C.void1); vg.addColorStop(1, 'rgba(20,12,42,0)');
+      g.fillStyle = vg; g.fillRect(0, 0, W, ledgeY + 40);
+    }
     // slab glow + fill (shadowBlur is fine here: this layer renders only on resize)
     g.save(); g.shadowColor = 'rgba(46,242,200,0.10)'; g.shadowBlur = 24;
     g.fillStyle = 'rgba(255,255,255,0.05)';
@@ -257,15 +277,7 @@
     g.strokeStyle = 'rgba(255,255,255,0.14)'; g.lineWidth = 1; g.beginPath(); g.moveTo(laneLeft + 0.5, ledgeY); g.lineTo(laneLeft + 0.5, slabBottom); g.stroke();
     g.strokeStyle = 'rgba(255,255,255,0.06)'; g.beginPath(); g.moveTo(laneRight - 0.5, ledgeY); g.lineTo(laneRight - 0.5, slabBottom); g.stroke();
     // heat-map dots (last 40 stops)
-    if (P.heatMap) {
-      for (let i = 0; i < P.stops.length; i++) {
-        const s = P.stops[i]; if (s > 1.02 || s < M.S0) continue;
-        const x = L.laneX + hashOffset(s) * laneW; const y = yOf(Math.min(s, 1.0));
-        const kind = s < M.ZONE_START ? 'short' : s > 1 ? 'bust' : s >= 1 - M.SIZES[P.size].r ? 'hang' : 'zone';
-        g.fillStyle = kind === 'short' ? 'rgba(91,107,138,0.45)' : kind === 'bust' ? 'rgba(255,61,129,0.35)' : kind === 'hang' ? 'rgba(255,181,71,0.45)' : 'rgba(46,242,200,0.35)';
-        g.beginPath(); g.arc(x, y, 2, 0, Math.PI * 2); g.fill();
-      }
-    }
+    if (P.heatMap) for (let i = 0; i < P.stops.length; i++) drawStopDot(g, P.stops[i]);
     g.restore();
     // amber light spilling up from the edge into the void (soft ellipse, clipped to the void side)
     g.save(); g.beginPath(); g.rect(0, 0, W, ledgeY); g.clip(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.5;
@@ -278,6 +290,18 @@
     g.fillStyle = C.ledge; g.fillRect(laneLeft, ledgeY - 1, laneW, 2);
     g.fillStyle = 'rgba(255,224,138,0.35)'; g.fillRect(laneLeft, ledgeY - 3, laneW, 1);
     staticDirty = false;
+  }
+  function drawStopDot(g, s) {
+    if (!(s <= 1.02 && s >= M.S0)) return;
+    const x = L.laneX + hashOffset(s) * L.laneW; const y = yOf(Math.min(s, 1.0));
+    const kind = s < M.ZONE_START ? 'short' : s > 1 ? 'bust' : s >= 1 - M.SIZES[P.size].r ? 'hang' : 'zone';
+    g.fillStyle = kind === 'short' ? 'rgba(91,107,138,0.45)' : kind === 'bust' ? 'rgba(255,61,129,0.35)' : kind === 'hang' ? 'rgba(255,181,71,0.45)' : 'rgba(46,242,200,0.35)';
+    g.beginPath(); g.arc(x, y, 2, 0, Math.PI * 2); g.fill();
+  }
+  // a new stop mark is painted straight onto the static layer: a full rebuild on the stop frame would hitch exactly at the settle
+  function paintStopDot(s) {
+    if (!P.heatMap || staticDirty) return;
+    const g = staticCanvas.getContext('2d'); g.save(); g.setTransform(L.dpr, 0, 0, L.dpr, 0, 0); drawStopDot(g, s); g.restore();
   }
   function roundRectPath(g, x, y, w, h, r) {
     const [tl, tr, br, bl] = r;
@@ -298,6 +322,8 @@
   function tweenTs(to, dur) { tsT.from = ts; tsT.to = to; tsT.t0 = now; tsT.dur = Math.max(1, dur); }
   function updateTs() { const u = clamp((now - tsT.t0) / tsT.dur, 0, 1); ts = lerp(tsT.from, tsT.to, easeInOutCubic(u)); }
   let camK = 1, camTarget = 1;
+  let camReturn = null;     // dedicated 400 ms ease-in-out return to 1.0 (spec 6.6); the exponential follow-zoom resumes when it ends
+  function startCamReturn() { if (camK > 1.02 && !RM()) camReturn = { t0: now, from: camK, dur: 400 }; }
   const shake = { amp: 0, t0: 0, dur: 1, x: 0, y: 0 };
   function startShake(amp, dur) { if (RM()) return; shake.amp = amp; shake.t0 = now; shake.dur = dur; }
   let currentShakeAmp = 0;
@@ -338,17 +364,27 @@
   function onEnter(s) {
     if (s === 'IDLE') {
       idleT0 = now; idlePuckAlpha = 0; idlePuckScale = 0.9;
+      // a skip hold can never carry into the next round
+      skipPointer = null; if (!skipping) speed = 1;
+      el.corner.classList.remove('dim');
       updateControls();
     } else if (s === 'AIMING') {
       el.canvas.classList.add('aiming');
       updateControls();
+    } else if (s === 'SLIDING') {
+      el.corner.classList.remove('dim');
+      updateControls();
     } else if (s === 'PAYOUT') {
       startPayoutCount();
+      updateControls();
     } else if (s === 'SETTLE') {
       if (live && live.visible && !live.dissolveT0) live.dissolveT0 = now;
+      if (live && live.revealText) { setText(el.cornerLast, live.revealText); live.revealText = ''; }
+      el.corner.classList.remove('dim');
       el.lockup.classList.remove('show');
       el.againBtn.classList.remove('pulse'); void el.againBtn.offsetWidth; el.againBtn.classList.add('pulse');
       snd('settleWhish');
+      startCamReturn();
       updateControls();
     }
   }
@@ -357,20 +393,26 @@
   function launch(aimIn, opts) {
     opts = opts || {};
     if (!(state === 'AIMING' || canStartRound())) return null;
-    clampBet();
+    if (!opts.auto) clampBet(); // an explicit press/aim clamps the stake (spec 4, with the pill flash); auto-repeat never re-bets lower
     const betCents = P.bet * 100;
     if (P.balanceCents < betCents || P.balanceCents < 100) { updateControls(); return null; }
     const aim = clamp(+aimIn || P.lastAim, M.AIM_MIN, M.AIM_MAX);
     const size = P.size; const r = M.SIZES[size].r;
     const priced = M.priced(aim, size);
-    // previous puck (overlapping rounds) becomes a dissolve effect
-    if (live && live.visible) { pushDissolve(live, 400); }
+    // previous round (overlapping rounds) is superseded: its puck becomes a dissolve effect, its deferred presentation is dropped,
+    // and its seed reveal (normally written at SETTLE) is written now so it is never skipped
+    if (live) {
+      if (live.visible) pushDissolve(live, 400);
+      if (live.revealText) { setText(el.cornerLast, live.revealText); live.revealText = ''; }
+      vtimers.length = 0; pendingShake = null;
+    }
     // draw from the committed seed, then commit the next one immediately
     const seedHex = pending.hex; const commit = pending.commit; const draw = M.seedToDraw(pending.bytes);
     newPending();
     const sStop = aim * draw.X;
     const T = M.slideDuration(sStop);
     P.balanceCents -= betCents; P.rounds += 1; P.wageredCents += betCents; SES.wagered += betCents; SES.rounds += 1;
+    SES.sumVar += Math.pow(PAYOUT_SD[size] * betCents, 2);
     tweenBalance(P.balanceCents, 200, false);
     roundCounter += 1;
     live = {
@@ -398,6 +440,7 @@
     }
     setState('SLIDING');
     el.canvas.classList.remove('aiming');
+    startCamReturn(); // a pull during PAYOUT finds the camera still zoomed: ease it back over 400 ms, not with the 90 ms slide exponential
     fx.push(ringFx(L.laneX, L.footY, L.R, L.R * 2.3, 320, 'teal'));
     snd('launch'); snd('glideStart'); vibrate(20);
     save();
@@ -433,13 +476,15 @@
     if (winCents > P.bestWinCents) P.bestWinCents = winCents;
     P.stops.push(+rd.sStop.toFixed(5)); if (P.stops.length > 40) P.stops.splice(0, P.stops.length - 40);
     const rec = { n: P.rounds, commit: rd.commit || '', seed: rd.seedHex, aim: +rd.aim.toFixed(4), size: rd.size, betCents: rd.betCents, X: +rd.X.toFixed(6), Z: +rd.Z.toFixed(6), sStop: +rd.sStop.toFixed(6), outcome: kind, f: f === null ? null : +f.toFixed(6), mult, winCents, c: +rd.priced.c.toFixed(6) };
-    if (!rec.commit) { Promise.resolve(M.sha256Hex(rd.seedHex)).then((h) => { if (h) rec.commit = h; }).catch(() => {}); }
+    // the commit is captured synchronously at launch; if its digest had not resolved yet, back-fill the record (and the live round, and an open log)
+    if (!rec.commit) { Promise.resolve(M.sha256Hex(rd.seedHex)).then((h) => { if (!h) return; rec.commit = h; rd.commit = h; save(); if (fairnessOpen) renderLog(); }).catch(() => {}); }
     P.log.push(rec); if (P.log.length > 20) P.log.splice(0, P.log.length - 20);
-    staticDirty = true;
+    paintStopDot(rd.sStop);
     save();
     renderResults(); updateStats();
-    setText(el.cornerLast, 'last ' + rd.seedHex.slice(0, 4) + '… · wax ×' + rd.X.toFixed(3));
-    if (instant) return;
+    // seed reveal is written at SETTLE (spec 2 / 3.8); launch() writes it early if this round is superseded before then
+    rd.revealText = 'last ' + rd.seedHex.slice(0, 4) + '… · wax ×' + rd.X.toFixed(3);
+    if (instant) { setText(el.cornerLast, rd.revealText); rd.revealText = ''; return; }
     // presentation
     rd.freezeMs = 0;
     if (kind === 'hang' && rd.tier >= 3) rd.freezeMs = RM() ? 200 : (rd.tier === 4 ? 600 : 400);
@@ -448,6 +493,7 @@
     else if (kind === 'hang') { setState('RESOLVE_HANG'); showHang(rd); }
     else { setState('RESOLVE_BUST'); showBust(rd); }
     announce(rd);
+    updateControls(); // size segments unlock once the puck has stopped
   }
 
   function announce(rd) {
@@ -477,14 +523,24 @@
   }
 
   // ---- presentation per outcome --------------------------------------------
-  function resetLockup() {
-    el.lockup.classList.remove('show');
+  let lockupGen = 0, lockupStale = false;
+  function clearLockupText() {
     el.lockupMult.className = 'lockup-mult num'; el.lockupSub.className = 'lockup-sub num'; el.lockupWin.className = 'lockup-win num'; el.lockupTier.className = 'lockup-tier';
     setText(el.lockupTier, ''); setText(el.lockupMult, ''); setText(el.lockupSub, ''); setText(el.lockupWin, '');
-    lockupAnim = null; payout = null;
+    el.lockup.style.top = L.lockupTop + 'px';
+    lockupStale = false;
+  }
+  function resetLockup() {
+    // the previous result fades out as a whole (spec 6.6): the text is cleared only once the 300 ms opacity fade has ended,
+    // or by the next round's first lockup write, whichever comes first
+    el.lockup.classList.remove('show');
+    lockupAnim = null; payout = null; lockupStale = true;
+    const gen = ++lockupGen;
+    setTimeout(() => { if (gen === lockupGen && lockupStale && !el.lockup.classList.contains('show')) clearLockupText(); }, 320);
   }
   let lockupAnim = null; // { kind:'pct'|'win', from, to, t0, dur }
   function popMult(cls, text) {
+    if (lockupStale) clearLockupText();
     el.lockupMult.className = 'lockup-mult num ' + cls; setText(el.lockupMult, text);
     el.lockupMult.classList.remove('pop'); void el.lockupMult.offsetWidth; el.lockupMult.classList.add('pop');
     el.lockup.classList.add('show');
@@ -493,6 +549,10 @@
     popMult('short', 'SHORT');
     const by = M.ZONE_START - rd.sStop;
     setText(el.lockupSub, by <= 0.015 ? 'by ' + (by * 100).toFixed(1) + '%' : '');
+    // a SHORT puck stops in the deck where the readout lives: drop the lockup just below the stopped puck (deliberate deviation from
+    // "updated on resize only"; zone/hang/bust keep the fixed position, restored by clearLockupText)
+    const puckBottom = worldToScreenY(yOf(rd.sStop)) + Rof(rd.size) * camK;
+    el.lockup.style.top = Math.round(Math.min(Math.max(L.lockupTop, puckBottom + 12), Math.max(0, L.cssH - 120))) + 'px';
     rd.dissolveT0 = now + 300;
   }
   function showZone(rd) {
@@ -600,13 +660,16 @@
     const W = L.cssW; const Hfull = Math.max(60, L.ledgeY + 70); const sc = auroraLayer.scale;
     const w = Math.max(8, Math.round(W * sc)), h = Math.max(8, Math.round(Hfull * sc));
     const a = auroraLayer;
-    if (a.w !== w || a.h !== h) { a.c.width = w; a.c.height = h; a.w = w; a.h = h; const ag = a.c.getContext('2d'); a.mask = ag.createLinearGradient(0, 0, 0, h); a.mask.addColorStop(0, 'rgba(0,0,0,1)'); a.mask.addColorStop(0.55, 'rgba(0,0,0,0.85)'); a.mask.addColorStop(1, 'rgba(0,0,0,0)'); }
+    if (a.w !== w || a.h !== h) { a.c.width = w; a.c.height = h; a.w = w; a.h = h; const ag = a.c.getContext('2d'); a.mask = ag.createLinearGradient(0, 0, 0, h); a.mask.addColorStop(0, 'rgba(0,0,0,1)'); a.mask.addColorStop(0.55, 'rgba(0,0,0,0.85)'); a.mask.addColorStop(1, 'rgba(0,0,0,0)');
+      // desktop: the canvas is a column in a page-wide void, so the aurora also fades out toward the canvas's side edges (no boxed tint)
+      a.maskX = ag.createLinearGradient(0, 0, w, 0); a.maskX.addColorStop(0, 'rgba(0,0,0,0)'); a.maskX.addColorStop(0.3, 'rgba(0,0,0,1)'); a.maskX.addColorStop(0.7, 'rgba(0,0,0,1)'); a.maskX.addColorStop(1, 'rgba(0,0,0,0)'); }
     const ag = a.c.getContext('2d'); const t = RM() ? 0 : now;
     ag.setTransform(1, 0, 0, 1, 0, 0); ag.globalCompositeOperation = 'source-over'; ag.globalAlpha = 1; ag.clearRect(0, 0, w, h);
     ag.globalCompositeOperation = 'lighter';
     for (const b of AUR) { const x = W * (b.ax + 0.18 * Math.sin(t * b.px + b.ph)); const y = (L.ledgeY + 30) * (b.ay + 0.2 * Math.cos(t * b.py + b.ph)); const d = L.laneW * b.size;
       ag.globalAlpha = b.a * auroraBoost; ag.drawImage(sprites.glow[b.c], (x - d / 2) * sc, (y - d / 2) * sc, d * sc, d * sc); }
     ag.globalAlpha = 1; ag.globalCompositeOperation = 'destination-in'; ag.fillStyle = a.mask; ag.fillRect(0, 0, w, h);
+    if (L.desktop) { ag.fillStyle = a.maskX; ag.fillRect(0, 0, w, h); }
     g.save(); g.globalCompositeOperation = 'lighter'; g.imageSmoothingEnabled = true; g.drawImage(a.c, 0, 0, W, Hfull); g.restore();
   }
   function drawFlowGrid(g) {
@@ -644,9 +707,12 @@
     g.drawImage(sprites.glow.gold, x - R * 1.6, L.ledgeY - R * 0.5, R * 3.2, R * 2); g.restore();
   }
   function drawLedgeSparkle(g) {
+    // spec 6.3: a moving ~30% white highlight on the lip hairline, sweeping left to right every 6 s (a soft 120 px band, not a dot)
     if (RM()) return; const ph = (now / 6000) % 1; const x = L.laneLeft + ph * L.laneW; const a = Math.sin(ph * Math.PI);
-    g.globalAlpha = 0.75 * a; g.fillStyle = '#FFFFFF'; g.fillRect(x - 24, L.ledgeY - 1, 48, 2); g.globalAlpha = 1;
-    drawGlow('gold', x, L.ledgeY, 36, 0.6 * a);
+    g.save(); g.beginPath(); g.rect(L.laneLeft, L.ledgeY - 6, L.laneW, 12); g.clip(); g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = 0.38 * a; g.drawImage(sprites.sweep, x - 60, L.ledgeY - 1, 120, 2);
+    g.globalAlpha = 0.07 * a; g.drawImage(sprites.sweep, x - 60, L.ledgeY - 5, 120, 10);
+    g.restore();
   }
   function ringFx(x, y, r0, r1, dur, color) {
     return { t0: now, dur, world: true, draw(g, u) { const e = easeOutCubic(u); const r = lerp(r0, r1, e); const a = 0.5 * (1 - u);
@@ -669,9 +735,11 @@
   function startPayoutCount() {
     const rd = live; if (!rd || !rd.winCents) return;
     const delay = 80;
-    payout = { t0: now + delay, dur: rd.tier === 4 ? 1200 : 600, winCents: rd.winCents, cls: rd.outcome === 'hang' ? (rd.tier >= 3 ? 'gold' : 'hang') : '' };
-    el.lockupWin.className = 'lockup-win num ' + payout.cls;
-    setTimeoutV(delay, () => { tweenBalance(P.balanceCents, payout.dur, true); });
+    // captured locally: `payout` is nulled when a new round launches during PAYOUT, and a superseded count-up must neither throw nor tween
+    const p = { t0: now + delay, dur: rd.tier === 4 ? 1200 : 600, winCents: rd.winCents, cls: rd.outcome === 'hang' ? (rd.tier >= 3 ? 'gold' : 'hang') : '' };
+    payout = p;
+    el.lockupWin.className = 'lockup-win num ' + p.cls;
+    setTimeoutV(delay, () => { if (payout === p) tweenBalance(P.balanceCents, p.dur, true); });
   }
   // virtual-clock timeouts (so skipping also accelerates them)
   const vtimers = [];
@@ -700,8 +768,9 @@
     if (el.ladder) { if (!el.ladder.childElementCount) for (let i = 0; i < M.BET_LADDER.length; i++) el.ladder.appendChild(document.createElement('i'));
       const kids = el.ladder.children; for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('on', M.BET_LADDER[i] <= P.bet); }
   }
+  const sizeLocked = () => state === 'SLIDING' || state === 'AIMING'; // sizes are a pre-release choice (spec 3.1): never swap the live round's lane
   function setSize(k) {
-    if (!M.SIZES[k] || k === P.size) return;
+    if (!M.SIZES[k] || k === P.size || sizeLocked()) return;
     P.size = k; save(); L.R = Rof(k); staticDirty = true;
     renderSize(); updateOdds(shownAim, k); lastFrozen = M.priced(shownAim, k); renderFairTable(); snd('buttonTap');
   }
@@ -715,8 +784,11 @@
     const broke = P.balanceCents < 100;
     el.topupBtn.hidden = !broke; el.againBtn.hidden = broke;
     el.caption.hidden = !broke; el.stage.classList.toggle('locked', broke);
-    const canAgain = !broke && P.rounds > 0 && state !== 'AIMING' && P.balanceCents >= Math.min(P.bet, 1) * 100;
+    const canAgain = !broke && P.rounds > 0 && state !== 'AIMING' && P.balanceCents >= P.bet * 100; // spec 7.3: disabled while balance < bet
     el.againBtn.disabled = !canAgain;
+    const lock = sizeLocked();
+    el.sizeSeg.classList.toggle('locked', lock);
+    for (const b of el.sizeSeg.querySelectorAll('.seg-btn')) b.setAttribute('aria-disabled', lock ? 'true' : 'false');
     el.betUp.disabled = P.bet >= M.BET_LADDER[M.BET_LADDER.length - 1] || (P.bet * 100 >= P.balanceCents && M.BET_LADDER.indexOf(P.bet) >= 0 && P.bet >= Math.floor(P.balanceCents / 100));
     el.betDown.disabled = P.bet <= 1;
   }
@@ -724,6 +796,17 @@
 
   // ------------------------------------------------------------------ odds / ruler / stats
   let oddsCache = { aim: -1, size: '' };
+  const oddsNeed = { strip: [0, 0, 0, 0], chipW: 0 };
+  // widths the strip really needs: per segment "label + gap + value" measured with the label shown, and the ALL PAYS chip while shown
+  function measureOdds() {
+    const bar = el.odds.querySelector('.odds-bar'); if (!bar) return;
+    const segs = bar.querySelectorAll('.seg');
+    for (let i = 0; i < 4; i++) { const s = segs[i]; if (!s) continue; const had = s.classList.contains('narrow'); s.classList.remove('narrow');
+      const lab = s.querySelector('.seg-label'), val = s.querySelector('.seg-val');
+      oddsNeed.strip[i] = (lab ? lab.offsetWidth : 0) + 4 + Math.max(24, val ? val.offsetWidth : 0) + 4;
+      if (had) s.classList.add('narrow'); }
+    const wasHidden = el.oddsChip.hidden; el.oddsChip.hidden = false; oddsNeed.chipW = el.oddsChip.offsetWidth; el.oddsChip.hidden = wasHidden;
+  }
   function updateOdds(aim, size) {
     const a = Math.round(aim * 1000) / 1000;
     if (oddsCache.aim === a && oddsCache.size === size) return;
@@ -731,14 +814,19 @@
     const p = M.probs(aim, size); const pr = M.priced(aim, size);
     const vals = [p.short, p.zone, p.hang, p.bust];
     const names = ['short', 'zone', 'hang', 'bust'];
-    const apply = (root, barW) => {
-      if (!root) return; const segs = root.querySelectorAll('.seg');
-      for (let i = 0; i < 4; i++) { const pct = vals[i] * 100; const s = segs[i]; if (!s) continue; const pxw = Math.max(3, pct) / 100 * (barW || 360);
-        s.style.flexBasis = Math.max(9, pct) + '%'; s.classList.toggle('narrow', pxw < 68); s.classList.remove('tiny');
+    const showChip = pr.c >= M.PRICE_CHIP_MIN; const chipText = 'ALL PAYS ×' + pr.c.toFixed(2);
+    const apply = (root, barW, need) => {
+      if (!root) return; const segs = root.querySelectorAll('.seg'); const inner = Math.max(0, barW - 6); // three 2 px gaps
+      const bases = vals.map((v) => Math.max(9, v * 100));
+      if (need) for (let i = 0; i < 4; i++) { const np = need[i] / inner * 100; if (np > bases[i] && np - bases[i] <= 3) bases[i] = np; } // a 3-point stretch keeps a word that nearly fits
+      const sum = bases.reduce((s, v) => s + v, 0);
+      for (let i = 0; i < 4; i++) { const pct = vals[i] * 100; const s = segs[i]; if (!s) continue; const pxw = bases[i] / sum * inner;
+        s.style.flexBasis = bases[i].toFixed(2) + '%'; s.classList.toggle('narrow', !!need && pxw < need[i]); s.classList.remove('tiny');
         setText(s.querySelector('b'), String(Math.round(pct))); s.title = names[i] + ' ' + pct.toFixed(1) + '%'; }
     };
-    apply(el.odds.querySelector('.odds-bar'), L.oddsW); apply(el.oddsCard, L.cardW);
-    const showChip = pr.c >= M.PRICE_CHIP_MIN; const chipText = 'ALL PAYS ×' + pr.c.toFixed(2);
+    // the strip shares its row with the ALL PAYS chip: labels are fitted to the width that is actually left; the desktop card never drops one
+    apply(el.odds.querySelector('.odds-bar'), L.oddsW - (showChip ? oddsNeed.chipW + 8 : 0), oddsNeed.strip);
+    apply(el.oddsCard, L.cardW, null);
     el.oddsChip.hidden = !showChip; setText(el.oddsChip, chipText);
     if (el.oddsChipCard) { el.oddsChipCard.hidden = !showChip; setText(el.oddsChipCard, chipText); }
     setText(el.oddsPays, 'ZONE ' + M.fmtMult(pr.zoneMult) + ' · HANG ' + pr.hangBase.toFixed(2) + '–' + M.fmtMult(pr.hangMax));
@@ -750,7 +838,8 @@
     const rtp = '96.5%';
     setText(el.statBest, best); setText(el.statBiggest, big); setText(el.statRtp, rtp);
     setText(el.fairBest, best); setText(el.fairBiggest, big); setText(el.fairHangs, String(P.hangs)); setText(el.fairTopups, String(P.topUps));
-    const se = SES.rounds > 0 ? (190 / Math.sqrt(SES.rounds)).toFixed(0) : '—';
+    // standard error of the session RTP from the sizes and stakes actually played (spec 3.6 SDs), not a single constant
+    const se = SES.wagered > 0 ? (100 * Math.sqrt(SES.sumVar) / SES.wagered).toFixed(0) : '—';
     setText(el.fairSession, SES.rounds + ' rounds · wagered ' + M.fmtChips(SES.wagered) + ' · returned ' + M.fmtChips(SES.returned) + ' · realised RTP ' + (SES.wagered > 0 ? (SES.returned / SES.wagered * 100).toFixed(1) + '%' : '—') + (SES.rounds > 0 ? ' (±' + se + ' points at this sample size — swings are normal)' : ''));
   }
   function renderResults() {
@@ -760,7 +849,7 @@
       const m = r.outcome === 'short' || r.outcome === 'bust' ? '—' : M.fmtMult(r.mult);
       const w = r.winCents > 0 ? '+' + fmt2(r.winCents) : '−' + fmt2(r.betCents);
       const pct = r.outcome === 'hang' ? (r.f * 100).toFixed(1) + '%' : r.outcome.toUpperCase();
-      return '<li class="' + r.outcome + '"><span class="g"></span><span class="m">' + m + '</span><span>' + pct + '</span><span class="w">' + w + '</span></li>';
+      return '<li class="' + r.outcome + '"><span class="g"><svg class="icon" aria-hidden="true"><use href="#i-r-' + r.outcome + '"/></svg></span><span class="m">' + m + '</span><span>' + pct + '</span><span class="w">' + w + '</span></li>';
     }).join('');
     if (el.results.__h !== html) { el.results.__h = html; el.results.innerHTML = html; }
   }
@@ -773,8 +862,12 @@
   function renderLog() {
     const tb = el.logTable.querySelector('tbody'); const items = P.log.slice().reverse();
     tb.innerHTML = items.map((r) => { const res = r.outcome === 'hang' ? 'HANG ' + (r.f * 100).toFixed(1) + '% ' + M.fmtMult(r.mult) : r.outcome === 'zone' ? 'ZONE ' + M.fmtMult(r.mult) : r.outcome.toUpperCase();
-      return '<tr><td>' + r.n + '</td><td class="seed" title="' + (r.commit || '') + '">' + (r.commit ? r.commit.slice(0, 8) : '—') + '</td><td class="seed" title="' + r.seed + '">' + r.seed.slice(0, 8) + '…</td><td>' + Math.round(r.aim * 100) + '%</td><td>' + r.size + '</td><td>' + M.fmtChips(r.betCents) + '</td><td>' + r.X.toFixed(4) + '</td><td>' + (r.sStop * 100).toFixed(2) + '%</td><td class="' + r.outcome + '">' + res + '</td><td>' + (r.winCents ? '+' + fmt2(r.winCents) : '0') + '</td></tr>'; }).join('') || '<tr><td colspan="10" class="muted">No rounds yet.</td></tr>';
+      return '<tr><td>' + r.n + '</td><td class="seed" title="' + (r.commit || '') + '">' + (r.commit ? r.commit.slice(0, 8) : '—') + '</td><td class="seed" title="' + r.seed + '">' + r.seed.slice(0, 8) + '…</td><td title="' + r.aim.toFixed(4) + '">' + (r.aim * 100).toFixed(2) + '%</td><td>' + r.size + '</td><td>' + M.fmtChips(r.betCents) + '</td><td>' + r.X.toFixed(4) + '</td><td>' + (r.sStop * 100).toFixed(2) + '%</td><td class="' + r.outcome + '">' + res + '</td><td>' + (r.winCents ? '+' + fmt2(r.winCents) : '0') + '</td></tr>'; }).join('') || '<tr><td colspan="10" class="muted">No rounds yet.</td></tr>';
   }
+  // wide tables (phone): fade the right edge until scrolled to the end so the clipped column reads as scrollable
+  const tableWraps = Array.from(el.sheet.querySelectorAll('.table-wrap'));
+  function updateTableHint(w) { const sc = w.scrollWidth > w.clientWidth + 1; w.classList.toggle('scrollable', sc); w.classList.toggle('at-end', !sc || w.scrollLeft + w.clientWidth >= w.scrollWidth - 1); }
+  for (const w of tableWraps) w.addEventListener('scroll', () => updateTableHint(w), { passive: true });
   let lastFocus = null;
   function openFairness() {
     if (fairnessOpen) return;
@@ -783,7 +876,7 @@
     renderFairTable(); renderLog(); updateStats();
     el.togReduce.checked = RM(); el.togHeat.checked = !!P.heatMap;
     el.backdrop.hidden = false; el.sheet.hidden = false;
-    requestAnimationFrame(() => { el.backdrop.classList.add('open'); el.sheet.classList.add('open'); });
+    requestAnimationFrame(() => { el.backdrop.classList.add('open'); el.sheet.classList.add('open'); for (const w of tableWraps) updateTableHint(w); });
     el.fairClose.focus();
     updateControls();
   }
@@ -803,14 +896,18 @@
   });
 
   // ------------------------------------------------------------------ hint
-  function showHint() { if (P.hintSeen) return; el.hint.hidden = false; hintVisible = true; requestAnimationFrame(() => el.hint.classList.add('show')); }
+  let hintTimer = 0;
+  function showHint() { if (P.hintSeen || P.rounds > 0 || state !== 'IDLE') return; el.hint.hidden = false; hintVisible = true; requestAnimationFrame(() => el.hint.classList.add('show')); }
   function dismissHint() {
-    if (!hintVisible) return; hintVisible = false; P.hintSeen = true; save();
+    // any canvas pointerdown or launch counts as "seen", even before the 400 ms show timer has fired (never pop the hint mid-round)
+    clearTimeout(hintTimer);
+    if (!P.hintSeen) { P.hintSeen = true; save(); }
+    if (!hintVisible) return; hintVisible = false;
     el.hint.classList.remove('show'); setTimeout(() => { if (!hintVisible) el.hint.hidden = true; }, 320);
   }
 
   // ------------------------------------------------------------------ input
-  let aimPointer = null, startY = 0, pull = 0, aim = M.AIM_MIN, cancelRegion = false, aimMode = 'drag', chargeT0 = 0;
+  let aimPointer = null, startX = 0, startY = 0, pull = 0, aim = M.AIM_MIN, cancelRegion = false, aimMode = 'drag', chargeT0 = 0, aimFrom = 'IDLE';
   let ghostA = M.AIM_MIN, ghostAlpha = 0, cloudAlpha = 0, ghostFlashT = -1e9;
   let ghostCrossed90 = false, ghostCrossedEdge = false;
   let audioUnlocked = false;
@@ -821,13 +918,16 @@
     if (P.balanceCents < 100) { updateControls(); return false; }
     aimMode = mode; aim = M.AIM_MIN; pull = 0; cancelRegion = false; ghostA = P.lastAim; ghostAlpha = 0; cloudAlpha = 0; ghostCrossed90 = false; ghostCrossedEdge = false;
     if (mode === 'charge') { chargeT0 = now; }
+    aimFrom = state;
     setState('AIMING');
     return true;
   }
   function cancelAim() {
     aimPointer = null; el.canvas.classList.remove('aiming');
     if (state !== 'AIMING') return;
-    if (live && live.outcome && live.visible) { pushDissolve(live, 300); live = null; }
+    aimMode = 'drag';
+    // an aim that interrupted PAYOUT/SETTLE hands the finished round back to SETTLE so its lockup fades and AGAIN pulses as normal
+    if (live && live.outcome) { if (aimFrom === 'SETTLE') { state = 'SETTLE'; stateT0 = now; updateControls(); } else setState('SETTLE'); return; }
     setState('IDLE'); idlePuckAlpha = 1; idlePuckScale = 1;
   }
   el.canvas.addEventListener('pointerdown', (e) => {
@@ -836,12 +936,20 @@
     if (aimPointer !== null || (state === 'AIMING' && aimMode === 'charge')) return;
     if (canStartRound()) {
       if (!beginAim('drag')) return;
-      aimPointer = e.pointerId; startY = e.clientY;
+      aimPointer = e.pointerId; startX = e.clientX; startY = e.clientY;
       try { el.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     } else if (state === 'SLIDING' || state.indexOf('RESOLVE') === 0) {
-      if (!skipPointer) skipPointer = { id: e.pointerId, t0: now };
+      if (!skipPointer) { skipPointer = { id: e.pointerId, t0: now }; try { el.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } }
     }
   });
+  // the "next #… / last …" corner readout is a tap-to-verify affordance (spec 6.4) but must never intercept a pull: the canvas owns
+  // every pointerdown and a tap (< dead zone of travel) released inside the corner's >= 48 px hit box opens the panel instead
+  function cornerHit(x, y) {
+    if (el.corner.classList.contains('dim')) return false;
+    const r = el.corner.getBoundingClientRect(); if (!r.width) return false;
+    const padX = Math.max(0, (48 - r.width) / 2) + 6, padY = Math.max(0, (48 - r.height) / 2) + 6;
+    return x >= r.left - padX && x <= r.right + padX && y >= r.top - padY && y <= r.bottom + padY;
+  }
   el.canvas.addEventListener('pointermove', (e) => {
     if (e.pointerId !== aimPointer || state !== 'AIMING') return;
     pull = e.clientY - startY;
@@ -853,15 +961,15 @@
     if (e.pointerId !== aimPointer) return;
     aimPointer = null; el.canvas.classList.remove('aiming');
     if (state !== 'AIMING') return;
-    if (pull >= M.PULL_DEAD_PX && !cancelRegion) launch(aim); else cancelAim();
+    if (pull >= M.PULL_DEAD_PX && !cancelRegion) { launch(aim); return; }
+    const tap = e.type === 'pointerup' && Math.hypot((e.clientX || 0) - startX, (e.clientY || 0) - startY) < M.PULL_DEAD_PX;
+    cancelAim();
+    if (tap && cornerHit(e.clientX, e.clientY)) openFairness();
   };
   el.canvas.addEventListener('pointerup', endPointer);
   el.canvas.addEventListener('pointercancel', endPointer);
   el.canvas.addEventListener('lostpointercapture', (e) => { if (e.pointerId === aimPointer && state === 'AIMING') endPointer(e); });
   el.stage.addEventListener('contextmenu', (e) => e.preventDefault());
-  el.corner.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
-  el.corner.addEventListener('click', () => { unlockAudio(); openFairness(); });
-  el.corner.style.pointerEvents = 'auto'; el.corner.style.cursor = 'pointer';
 
   // AGAIN: fires on pointerdown; held >= 450 ms = auto-repeat every 250 ms
   let againHold = null, againArmAt = 0;
@@ -909,6 +1017,8 @@
     const tag = (e.target && e.target.tagName) || '';
     if (e.key === 'Escape') { if (fairnessOpen) { closeFairness(); return; } if (state === 'AIMING') { cancelAim(); return; } if (hintVisible) dismissHint(); return; }
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    // Enter/Space on a focused control activates that control (native click); AGAIN has no click handler and keeps the global path
+    if ((e.code === 'Enter' || e.code === 'Space') && tag === 'BUTTON' && e.target !== el.againBtn) return;
     if (e.code === 'KeyF') { e.preventDefault(); if (fairnessOpen) closeFairness(); else { unlockAudio(); openFairness(); } return; }
     if (fairnessOpen) return;
     unlockAudio();
@@ -942,9 +1052,12 @@
     if (e.code === 'Space') { if (state === 'AIMING' && aimMode === 'charge') launch(aim); }
     if (e.code === 'Enter' || e.code === 'KeyR') enterHold = null;
   });
-  function nudgeAim(d) { P.lastAim = +clamp(Math.round((P.lastAim + d) * 100) / 100, M.AIM_MIN, M.AIM_MAX).toFixed(2); save(); ghostFlashT = now; shownAim = P.lastAim; lastFrozen = M.priced(P.lastAim, P.size); updateOdds(P.lastAim, P.size); snd('aimTick'); }
-  window.addEventListener('blur', () => { againHold = null; enterHold = null; betHold = null; valueHold = null; if (!skipping) speed = 1; skipPointer = null; });
-  document.addEventListener('visibilitychange', () => { snd('onVisibility', document.hidden); if (document.hidden) { againHold = null; enterHold = null; betHold = null; } });
+  function nudgeAim(d) { P.lastAim = clamp(Math.round((P.lastAim + d) * 1000) / 1000, M.AIM_MIN, M.AIM_MAX); save(); ghostFlashT = now; shownAim = P.lastAim; lastFrozen = M.priced(P.lastAim, P.size); updateOdds(P.lastAim, P.size); snd('aimTick'); }
+  // losing focus mid-hold: a Space charge never gets its keyup, so the aim is cancelled rather than left ping-ponging
+  const dropHolds = () => { againHold = null; enterHold = null; betHold = null; valueHold = null; if (state === 'AIMING' && aimMode === 'charge') cancelAim(); };
+  window.addEventListener('blur', () => { dropHolds(); if (!skipping) speed = 1; skipPointer = null; });
+  document.addEventListener('visibilitychange', () => { snd('onVisibility', document.hidden); if (document.hidden) { dropHolds(); flushSave(); } });
+  window.addEventListener('pagehide', flushSave);
 
   // ------------------------------------------------------------------ update
   function update(dt) {
@@ -954,7 +1067,11 @@
     // hold inputs
     if (skipPointer && !skipping && now - skipPointer.t0 >= 300) speed = 3;
     const holdAgain = againHold || enterHold;
-    if (holdAgain && now - holdAgain.t0 >= 450 && now - lastLaunchT >= 250 && canStartRound()) { if (launch(P.lastAim)) vibrate(8); }
+    if (holdAgain && now - holdAgain.t0 >= 450 && now - lastLaunchT >= 250 && canStartRound()) {
+      // spec 7.1: auto-repeat stops when balance < bet; it never re-bets at a silently lowered stake
+      if (P.balanceCents >= P.bet * 100) { if (launch(P.lastAim, { auto: true })) vibrate(8); }
+      else { againHold = null; enterHold = null; updateControls(); }
+    }
     if (betHold && now >= betHold.last) { stepBet(betHold.dir); betHold.last = now + 150; }
     if (valueHold && !valueHold.fired && now - valueHold.t0 >= 600) { valueHold.fired = true; maxBet(); }
     updateTs();
@@ -993,9 +1110,12 @@
       if (live && live.stopT !== null && live.bustT0 === null) { const u = clamp((now - live.stopT) / 240, 0, 1); live.scale = 1 - 0.03 * Math.sin(u * Math.PI) * (1 - u); }
       if (live && live.dissolveT0 !== null) { const u = clamp((now - live.dissolveT0) / 400, 0, 1); live.alpha = 1 - easeInCubic(u); if (u >= 1) live.visible = false; }
     }
-    // camera smoothing
-    const tau = state === 'SLIDING' ? 90 : 150;
-    camK += (camTarget - camK) * (1 - Math.exp(-dt / tau));
+    // camera: a dedicated 400 ms ease-in-out return (spec 6.6) when one is running, else exponential follow; a new puck's zoom takes over
+    if (camReturn) {
+      const u = clamp((now - camReturn.t0) / camReturn.dur, 0, 1); const v = lerp(camReturn.from, 1, easeInOutCubic(u));
+      if (u >= 1 || camTarget > v + 1e-3) camReturn = null; else camK = v;
+    }
+    if (!camReturn) { const tau = state === 'SLIDING' ? 90 : 150; camK += (camTarget - camK) * (1 - Math.exp(-dt / tau)); }
     if (RM()) camK = 1;
     // shake
     if (shake.amp > 0) { const u = (now - shake.t0) / shake.dur; if (u >= 1) { shake.amp = 0; shake.x = shake.y = 0; currentShakeAmp = 0; } else { const a = shake.amp * (1 - u) * (1 - u); currentShakeAmp = a; shake.x = (Math.random() * 2 - 1) * a; shake.y = (Math.random() * 2 - 1) * a; } }
@@ -1033,6 +1153,7 @@
     if (!rd.crossed90 && s >= M.ZONE_START) { rd.crossed90 = true; popMult('zone', M.fmtMult(rd.priced.zoneMult)); fx.push(lineFlashFx()); snd('zoneTick'); }
     if (!rd.noseOver && s >= 1 - r) {
       rd.noseOver = true; rd.bracketT0 = now;
+      el.corner.classList.add('dim'); // the overhang bracket shares the top-left with the corner readout on phone: fade the readout
       const remainingNormal = (rd.lipT !== null ? rd.lipT : rd.T) - rd.tSim;
       let target = RM() ? 0.5 : M.SLOWMO;
       if (remainingNormal / target > M.CREEP_CAP_MS) target = Math.min(1, remainingNormal / M.CREEP_CAP_MS);
@@ -1074,7 +1195,7 @@
       const age = now - p.t0; if (age < 0) continue;
       const u = age / p.dur;
       if (u >= 1) { p.on = false; partsLive--; if (p.kind === 1 && !p.tick) { /* arrival */ } continue; }
-      if (p.kind === 1) { const e = easeInOutCubic(u); const a = 1 - e; p.x = a * a * p.x0 + 2 * a * e * p.cx + e * e * p.x1; p.y = a * a * p.y0 + 2 * a * e * p.cy + e * e * p.y1; }
+      if (p.kind === 1) { const e = easeOutCubic(u); const a = 1 - e; p.x = a * a * p.x0 + 2 * a * e * p.cx + e * e * p.x1; p.y = a * a * p.y0 + 2 * a * e * p.cy + e * e * p.y1; } // ease-out: chips leave the puck face at once
       else { p.vy += (p.kind === 2 ? 220 : 120) * dt / 1000; p.x += p.vx * dt / 1000; p.y += p.vy * dt / 1000; }
     }
   }
@@ -1095,7 +1216,8 @@
     const aiming = state === 'AIMING';
     if (aiming) drawCloud(g);
     for (const f of fx) if (f.world && now >= f.t0) { const u = clamp((now - f.t0) / f.dur, 0, 1); g.save(); f.draw(g, u); g.restore(); }
-    drawRuler(g, lastFrozen || M.priced(P.lastAim, P.size), aiming);
+    // ruler labels: live text only while aiming; otherwise a cached layer rebuilt when the frozen prices or layout change (spec 9.2)
+    if (aiming) drawRuler(g, lastFrozen || M.priced(P.lastAim, P.size)); else drawRulerCached(g, lastFrozen || M.priced(P.lastAim, P.size));
     if (aiming) drawGhost(g, ghostA, ghostAlpha * 0.3, cancelRegion, aim > 1.0);
     else if (now - ghostFlashT < 600) drawGhost(g, P.lastAim, 0.3 * (1 - (now - ghostFlashT) / 600), false, P.lastAim > 1.0);
     drawWorldParticles(g);
@@ -1143,32 +1265,49 @@
     g.beginPath(); g.arc(L.laneX, y, R - 1, 0, Math.PI * 2); g.fill();
     g.restore();
   }
-  function drawRuler(g, pr, liveNums) {
+  function drawRuler(g, pr) {
     if (!pr) return;
     const x = L.laneRight - 8; const R = L.R; const ledgeY = L.ledgeY; const y90 = yOf(M.ZONE_START);
     g.save(); g.font = '600 11px ' + '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; g.textAlign = 'right'; g.textBaseline = 'middle';
     const tick = (y, color, alpha) => { g.globalAlpha = alpha; g.fillStyle = color; g.fillRect(L.laneRight - 10, Math.round(y) - 0.5, 10, 1); };
-    const label = (y, text, color, alpha) => { g.globalAlpha = alpha; g.fillStyle = color; g.fillText(text, x - 12, y); tick(y, color, alpha * 0.9); };
+    // the tick stays on the boundary line; `base`/`textY` nudge the text off it so no hairline strikes through the digits
+    const label = (lineY, text, color, alpha, base, textY) => { g.globalAlpha = alpha; g.fillStyle = color; g.textBaseline = base || 'middle'; g.fillText(text, x - 12, textY === undefined ? lineY : textY); tick(lineY, color, alpha * 0.9); };
     label(ledgeY - 25, 'BUST', C.bust, 0.5);
     label(ledgeY - 9, 'to ' + M.fmtMult(pr.hangMax), C.gold, 1);
     if (R >= 30) label(ledgeY + R / 2, M.fmtMult(pr.multAt(0.25)), C.ledge, 0.95);
-    label(ledgeY + R + (R < 24 ? 4 : 1), M.fmtMult(pr.hangBase), C.ledge, 0.95);
-    label(y90 + 1, M.fmtMult(pr.zoneMult), C.zone, 0.95);
+    label(ledgeY + R, M.fmtMult(pr.hangBase), C.ledge, 0.95, 'top', ledgeY + R + 3);
+    label(y90, M.fmtMult(pr.zoneMult), C.zone, 0.95, 'top', y90 + 3);
     g.restore(); g.globalAlpha = 1;
+  }
+  const rulerLayer = { c: document.createElement('canvas'), key: '', x: 0, y: 0, w: 0, h: 0 };
+  let fontsReady = false; // flips once the web font has loaded so cached text layers re-render
+  function drawRulerCached(g, pr) {
+    if (!pr) return;
+    const key = pr.aim + '|' + P.size + '|' + L.R + '|' + L.laneRight + '|' + L.ledgeY + '|' + L.pxPerUnit + '|' + L.dpr + '|' + fontsReady;
+    const rl = rulerLayer;
+    if (rl.key !== key) {
+      rl.x = L.laneRight - 100; rl.y = L.ledgeY - 40; rl.w = 102; rl.h = Math.ceil(yOf(M.ZONE_START) - L.ledgeY + 70);
+      rl.c.width = Math.max(1, Math.round(rl.w * L.dpr)); rl.c.height = Math.max(1, Math.round(rl.h * L.dpr));
+      const rg = rl.c.getContext('2d'); rg.setTransform(L.dpr, 0, 0, L.dpr, -rl.x * L.dpr, -rl.y * L.dpr); rg.clearRect(rl.x, rl.y, rl.w, rl.h);
+      drawRuler(rg, pr); rl.key = key;
+    }
+    g.drawImage(rl.c, rl.x, rl.y, rl.w, rl.h);
   }
   function drawPuckAt(x, y, R, size, alpha, scale, scaleY, rot, glow, rim, glowAlpha) {
     if (alpha <= 0.003) return;
     const sp = sprites.puck[size]; if (!sp) return;
     ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.scale(scale, scale * scaleY);
     drawGlow(glow || 'teal', 0, 0, R * 4.4, glowAlpha === undefined ? 0.35 : glowAlpha);
+    if (rim) drawGlow('magenta', 0, 0, R * 3, 0.35); // bust rim light goes under the disc: additive on top blew the face out to flat white
     // soft shadow toward the foot
     ctx.globalAlpha = alpha * 0.45; ctx.drawImage(sprites.shadow, -R * 1.15, -R * 1.15 + 6, R * 2.3, R * 2.3); ctx.globalAlpha = alpha;
     const pad = 4; ctx.drawImage(sp, -R - pad, -R - pad, (R + pad) * 2, (R + pad) * 2);
-    // rotating ring highlight (60° arc)
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = Math.max(1.5, R * 0.06); ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.arc(0, 0, R - 1.5, rot, rot + Math.PI / 3); ctx.stroke();
+    // rotating ring highlight (60° arc), centred top-left at rest to agree with the face gradient and specular dot
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = Math.max(1.5, R * 0.06); ctx.lineCap = 'round';
+    const a0 = rot - Math.PI * 0.75 - Math.PI / 6;
+    ctx.beginPath(); ctx.arc(0, 0, R - 1.5, a0, a0 + Math.PI / 3); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.beginPath(); ctx.arc(-R * 0.36, -R * 0.36, Math.max(1.5, R * 0.08), 0, Math.PI * 2); ctx.fill();
-    if (rim) { ctx.strokeStyle = rim; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(0, 0, R - 0.5, 0, Math.PI * 2); ctx.stroke(); drawGlow('magenta', 0, 0, R * 3, 0.35); }
+    if (rim) { ctx.strokeStyle = rim; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(0, 0, R - 0.5, 0, Math.PI * 2); ctx.stroke(); }
     ctx.restore();
   }
   function drawLive(g) {
@@ -1218,8 +1357,8 @@
     if (document.hidden) { requestAnimationFrame(frame); return; }
     const t0 = performance.now();
     const dt = rawDt * speed; now += dt;
-    update(dt);
-    render();
+    // a thrown effect or presentation step must never stop the loop (the puck would freeze mid-slide forever)
+    try { update(dt); render(); } catch (err) { console.error('OVERHANG frame error', err); }
     const cost = performance.now() - t0;
     perf.times[perf.i] = cost; perf.i = (perf.i + 1) % perf.times.length; perf.n = Math.min(perf.n + 1, perf.times.length); perf.frames++;
     if ((perf.frames & 31) === 0) { const arr = Array.from(perf.times.subarray(0, perf.n)).sort((a, b) => a - b); perf.mean = arr.reduce((s, v) => s + v, 0) / Math.max(1, arr.length); perf.p95 = arr[Math.floor(arr.length * 0.95)] || 0; perf.rawDt = rawDt; }
@@ -1231,7 +1370,9 @@
     applyReduceClass();
     el.muteBtn.setAttribute('aria-pressed', P.muted ? 'true' : 'false');
     snd('init', { muted: !!P.muted });
-    renderBet(false); renderSize(); updateStats(); renderResults();
+    const paintProfile = () => { renderBet(false); renderSize(); updateStats(); renderResults(); };
+    // spec 9.7: a profile that renders badly is reset to defaults and play continues; the loop below must always start
+    try { paintProfile(); } catch (err) { console.warn('OVERHANG: profile reset after a render error', err); Object.assign(P, defaults()); save(); paintProfile(); }
     setText(el.balance, fmtChips(P.balanceCents));
     lastFrozen = M.priced(P.lastAim, P.size); shownAim = P.lastAim; updateOdds(P.lastAim, P.size);
     newPending();
@@ -1239,9 +1380,9 @@
     if ('ResizeObserver' in window) new ResizeObserver(() => relayout()).observe(el.stage);
     window.addEventListener('resize', relayout); window.addEventListener('orientationchange', () => setTimeout(relayout, 60));
     if (window.visualViewport) window.visualViewport.addEventListener('resize', relayout);
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { staticDirty = true; }).catch(() => {});
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { fontsReady = true; staticDirty = true; measureOdds(); oddsCache = { aim: -1, size: '' }; updateOdds(shownAim, P.size); }).catch(() => {});
     updateControls();
-    setTimeout(showHint, 400);
+    hintTimer = setTimeout(showHint, 400);
     requestAnimationFrame(frame);
   }
 
